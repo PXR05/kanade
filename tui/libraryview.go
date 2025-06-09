@@ -113,6 +113,14 @@ func (m *LibraryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		switch msg.String() {
+		case "tab":
+			// Switch to player view if a song is currently selected/playing
+			if m.currentSong != nil {
+				return m, func() tea.Msg {
+					return SwitchViewMsg{View: PlayerView}
+				}
+			}
+
 		case "up", "k":
 			if m.cursor > 0 {
 				m.cursor--
@@ -241,7 +249,7 @@ func (m *LibraryModel) View() string {
 	if len(m.songs) > visibleHeight {
 		pageInfo += fmt.Sprintf(" (showing %d-%d)", start+1, end)
 	}
-	helpText := "↑/↓ navigate • Enter select • q quit"
+	helpText := "↑/↓ navigate • Enter select • Tab player • q quit"
 
 	combinedLine := lipgloss.JoinHorizontal(lipgloss.Left,
 		currentStyles.Help.Render(pageInfo),

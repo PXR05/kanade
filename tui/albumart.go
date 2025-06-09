@@ -207,8 +207,8 @@ func (r *AlbumArtRenderer) imageToHighResASCII(img image.Image) string {
 	renderWidth := r.width * 2
 	renderHeight := r.height
 
-	sampleWidth := renderWidth * 3
-	sampleHeight := renderHeight * 3
+	sampleWidth := renderWidth * 5
+	sampleHeight := renderHeight * 5
 
 	scaleX := float64(squareSize) / float64(sampleWidth)
 	scaleY := float64(squareSize) / float64(sampleHeight)
@@ -233,10 +233,10 @@ func (r *AlbumArtRenderer) imageToHighResASCII(img image.Image) string {
 
 			var r, g, b, count uint32
 
-			for sy := range 3 {
-				for sx := range 3 {
-					sampleX := x*3 + sx
-					sampleY := y*3 + sy
+			for sy := range 5 {
+				for sx := range 5 {
+					sampleX := x*5 + sx
+					sampleY := y*5 + sy
 
 					imgX := cropX + int(float64(sampleX)*scaleX)
 					imgY := cropY + int(float64(sampleY)*scaleY)

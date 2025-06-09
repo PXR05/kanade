@@ -165,6 +165,13 @@ func (m *PlayerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		switch msg.String() {
+		case "tab":
+			if m.currentSong != nil {
+				return m, func() tea.Msg {
+					return SwitchViewMsg{View: LibraryView}
+				}
+			}
+
 		case " ", "p":
 
 			if m.isPlaying {
@@ -318,8 +325,7 @@ func (m *PlayerModel) View() string {
 
 		centerStyle := lipgloss.NewStyle().
 			Width(m.width).
-			Align(lipgloss.Center).
-			Margin(2, 0)
+			Align(lipgloss.Center)
 
 		content.WriteString(centerStyle.Render("No song selected"))
 		content.WriteString("\n\n")
@@ -328,7 +334,7 @@ func (m *PlayerModel) View() string {
 			Width(m.width).
 			Align(lipgloss.Center).
 			Foreground(lipgloss.Color("#626262"))
-		content.WriteString(helpStyle.Render("Press Esc or 'q' to go back to library"))
+		content.WriteString(helpStyle.Render("Press Esc, 'q', or Tab to go back to library"))
 		content.WriteString("\n")
 		content.WriteString(helpStyle.Render("Controls: Space/p:play/pause • ←/→/h/l:seek • Shift+←/→/h/l:prev/next track • ↑/↓/+/-:volume • m:mute"))
 
@@ -338,7 +344,7 @@ func (m *PlayerModel) View() string {
 	rawDominantColor := m.albumArtRenderer.ExtractDominantColor(*m.currentSong)
 	dominantColor := Colors.AdjustColorForContrast(rawDominantColor)
 
-	availableHeight := m.height - 5
+	availableHeight := m.height - 10
 	contentHeight := 20
 	topPadding := max((availableHeight-contentHeight)/2, 2)
 
