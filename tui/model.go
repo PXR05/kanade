@@ -3,11 +3,11 @@ package tui
 import (
 	"gmp/audio"
 	lib "gmp/library"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// ViewState represents the current view in the application
 type ViewState int
 
 const (
@@ -15,52 +15,50 @@ const (
 	PlayerView
 )
 
-// Model represents the main application model
 type Model struct {
-	// State management
 	currentView ViewState
 	width       int
 	height      int
 
-	// Components
 	libraryModel *LibraryModel
 	playerModel  *PlayerModel
 
-	// Data
-	library     *lib.Library
-	audioPlayer *audio.Player
-	songs       []lib.Song
+	library          *lib.Library
+	audioPlayer      *audio.Player
+	songs            []lib.Song
+	currentSongIndex int
 
-	// Current selection
 	selectedSong *lib.Song
 }
 
-// Messages for communication between views
 type (
-	// SongSelectedMsg is sent when a song is selected in library view
 	SongSelectedMsg struct {
 		Song lib.Song
 	}
 
-	// SwitchViewMsg is sent to switch between views
+	NextTrackMsg    struct{}
+	PrevTrackMsg    struct{}
+	SongFinishedMsg struct{}
+
 	SwitchViewMsg struct {
 		View ViewState
 	}
 
-	// PlaybackStatusMsg updates playback status
 	PlaybackStatusMsg struct {
 		IsPlaying bool
 		Position  string
 		Error     error
 	}
 
-	// WindowSizeMsg updates window dimensions
 	WindowSizeMsg struct {
 		Width, Height int
 	}
+
+	TickMsg struct {
+		Time time.Time
+	}
 )
 
-// NewModel creates a new main model
 func NewModel(library *lib.Library, audioPlayer *audio.Player) *Model {
 	songs := library.ListSongs()
 
@@ -68,16 +66,16 @@ func NewModel(library *lib.Library, audioPlayer *audio.Player) *Model {
 	playerModel := NewPlayerModel(audioPlayer)
 
 	return &Model{
-		currentView:  LibraryView,
-		library:      library,
-		audioPlayer:  audioPlayer,
-		songs:        songs,
-		libraryModel: libraryModel,
-		playerModel:  playerModel,
+		currentView:      LibraryView,
+		library:          library,
+		audioPlayer:      audioPlayer,
+		songs:            songs,
+		currentSongIndex: -1,
+		libraryModel:     libraryModel,
+		playerModel:      playerModel,
 	}
 }
 
-// Init initializes the model
 func (m *Model) Init() tea.Cmd {
 	return tea.Batch(
 		m.libraryModel.Init(),
@@ -85,7 +83,6 @@ func (m *Model) Init() tea.Cmd {
 	)
 }
 
-// Update handles messages and updates the model
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
@@ -94,7 +91,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 
-		// Update child models with new dimensions
 		libraryModel, libraryCmd := m.libraryModel.Update(WindowSizeMsg{Width: msg.Width, Height: msg.Height})
 		m.libraryModel = libraryModel.(*LibraryModel)
 
@@ -107,29 +103,46 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "ctrl+c", "q":
 			if m.currentView == PlayerView {
-				// If in player view, go back to library view
 				m.currentView = LibraryView
 				return m, nil
 			}
-			// If in library view, quit the application
 			return m, tea.Quit
 		case "esc":
-			// Always go back to library view on escape
 			if m.currentView == PlayerView {
 				m.currentView = LibraryView
 				return m, nil
 			}
 		}
 
+	case NextTrackMsg, SongFinishedMsg:
+		return m, m.playNextTrack()
+
+	case PrevTrackMsg:
+		return m, m.playPreviousTrack()
+
 	case SongSelectedMsg:
-		// Song was selected in library view, switch to player view
-		m.selectedSong = &msg.Song
 		m.currentView = PlayerView
 
-		// Load the song in the audio player
+		for i, song := range m.songs {
+			if song.Path == msg.Song.Path {
+				m.currentSongIndex = i
+				break
+			}
+		}
+
+		libraryModel, _ := m.libraryModel.Update(msg)
+		m.libraryModel = libraryModel.(*LibraryModel)
+
+		if m.selectedSong != nil && m.selectedSong.Path == msg.Song.Path {
+			playerModel, playerCmd := m.playerModel.Update(msg)
+			m.playerModel = playerModel.(*PlayerModel)
+			return m, playerCmd
+		}
+
+		m.selectedSong = &msg.Song
+
 		err := m.audioPlayer.Load(msg.Song.Path)
 		if err != nil {
-			// Send error to player view
 			playerModel, playerCmd := m.playerModel.Update(PlaybackStatusMsg{
 				Error: err,
 			})
@@ -137,7 +150,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, playerCmd
 		}
 
-		// Update player view with selected song
+		err = m.audioPlayer.Play()
+		if err != nil {
+			playerModel, playerCmd := m.playerModel.Update(PlaybackStatusMsg{
+				Error: err,
+			})
+			m.playerModel = playerModel.(*PlayerModel)
+			return m, playerCmd
+		}
+
 		playerModel, playerCmd := m.playerModel.Update(msg)
 		m.playerModel = playerModel.(*PlayerModel)
 		return m, playerCmd
@@ -147,7 +168,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Update the current view
 	switch m.currentView {
 	case LibraryView:
 		libraryModel, cmd := m.libraryModel.Update(msg)
@@ -158,12 +178,23 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		playerModel, cmd := m.playerModel.Update(msg)
 		m.playerModel = playerModel.(*PlayerModel)
 		cmds = append(cmds, cmd)
+
+		if _, ok := msg.(PlaybackStatusMsg); ok {
+			libraryModel, _ := m.libraryModel.Update(msg)
+			m.libraryModel = libraryModel.(*LibraryModel)
+		}
+		if _, ok := msg.(TickMsg); ok {
+			statusMsg := PlaybackStatusMsg{
+				IsPlaying: m.audioPlayer.IsPlaying(),
+			}
+			libraryModel, _ := m.libraryModel.Update(statusMsg)
+			m.libraryModel = libraryModel.(*LibraryModel)
+		}
 	}
 
 	return m, tea.Batch(cmds...)
 }
 
-// View renders the current view
 func (m *Model) View() string {
 	switch m.currentView {
 	case LibraryView:
@@ -172,5 +203,43 @@ func (m *Model) View() string {
 		return m.playerModel.View()
 	default:
 		return "Unknown view"
+	}
+}
+
+func (m *Model) playNextTrack() tea.Cmd {
+	if len(m.songs) == 0 || m.currentSongIndex < 0 {
+		return nil
+	}
+
+	nextIndex := m.currentSongIndex + 1
+	if nextIndex >= len(m.songs) {
+
+		nextIndex = 0
+	}
+
+	m.currentSongIndex = nextIndex
+	nextSong := m.songs[nextIndex]
+
+	return func() tea.Msg {
+		return SongSelectedMsg{Song: nextSong}
+	}
+}
+
+func (m *Model) playPreviousTrack() tea.Cmd {
+	if len(m.songs) == 0 || m.currentSongIndex < 0 {
+		return nil
+	}
+
+	prevIndex := m.currentSongIndex - 1
+	if prevIndex < 0 {
+
+		prevIndex = len(m.songs) - 1
+	}
+
+	m.currentSongIndex = prevIndex
+	prevSong := m.songs[prevIndex]
+
+	return func() tea.Msg {
+		return SongSelectedMsg{Song: prevSong}
 	}
 }

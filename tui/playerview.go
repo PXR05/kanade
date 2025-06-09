@@ -12,22 +12,24 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// PlayerModel represents the player view model
 type PlayerModel struct {
 	audioPlayer      *audio.Player
 	currentSong      *lib.Song
 	isPlaying        bool
 	position         time.Duration
 	totalDuration    time.Duration
+	volume           float64
+	lastVolumeChange time.Time
+	showVolumeBar    bool
 	errorMsg         string
 	width            int
 	height           int
 	styles           PlayerStyles
 	lastUpdate       time.Time
 	albumArtRenderer *AlbumArtRenderer
+	wasPlaying       bool
 }
 
-// PlayerStyles contains styling for the player view
 type PlayerStyles struct {
 	Title         lipgloss.Style
 	Metadata      lipgloss.Style
@@ -42,17 +44,16 @@ type PlayerStyles struct {
 	PauseIcon     lipgloss.Style
 }
 
-// NewPlayerModel creates a new player view model
 func NewPlayerModel(audioPlayer *audio.Player) *PlayerModel {
 	return &PlayerModel{
 		audioPlayer:      audioPlayer,
+		volume:           0.5,
 		styles:           DefaultPlayerStyles(),
 		lastUpdate:       time.Now(),
-		albumArtRenderer: NewAlbumArtRenderer(20, 10), // Default size
+		albumArtRenderer: NewAlbumArtRenderer(20, 20),
 	}
 }
 
-// DefaultPlayerStyles returns default styling for the player view
 func DefaultPlayerStyles() PlayerStyles {
 	return PlayerStyles{
 		Title: lipgloss.NewStyle().
@@ -96,40 +97,42 @@ func DefaultPlayerStyles() PlayerStyles {
 	}
 }
 
-// Init initializes the player model
 func (m *PlayerModel) Init() tea.Cmd {
-	return tea.Tick(time.Millisecond*200, func(t time.Time) tea.Msg {
+	return tea.Tick(time.Millisecond*100, func(t time.Time) tea.Msg {
 		return TickMsg{Time: t}
 	})
 }
 
-// TickMsg is sent periodically to update the playback position
-type TickMsg struct {
-	Time time.Time
-}
-
-// Update handles messages for the player view
 func (m *PlayerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
 
-		// Update album art renderer size based on available space
-		artWidth := 25
-		artHeight := 12
-		if m.width < 80 {
-			artWidth = 20
-			artHeight = 10
+		artSize := 20
+		if m.width >= 120 {
+			artSize = 25
 		}
-		m.albumArtRenderer = NewAlbumArtRenderer(artWidth, artHeight)
+		if m.width >= 100 {
+			artSize = 22
+		}
+		if m.width < 80 {
+			artSize = 18
+		}
+		m.albumArtRenderer = NewAlbumArtRenderer(artSize, artSize)
 		return m, nil
 
 	case SongSelectedMsg:
 		m.currentSong = &msg.Song
 		m.errorMsg = ""
+		if m.audioPlayer != nil {
+			m.audioPlayer.SetVolume(m.volume)
+		}
 		m.updatePlaybackStatus()
-		return m, nil
+
+		return m, tea.Tick(time.Millisecond*200, func(t time.Time) tea.Msg {
+			return TickMsg{Time: t}
+		})
 
 	case PlaybackStatusMsg:
 		if msg.Error != nil {
@@ -141,11 +144,23 @@ func (m *PlayerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case TickMsg:
-		// Update playback position periodically
-		if m.audioPlayer != nil {
+
+		if m.audioPlayer != nil && m.currentSong != nil {
 			m.updatePlaybackStatus()
+
+			if m.wasPlaying && !m.isPlaying && m.position >= m.totalDuration-time.Millisecond*100 {
+				m.wasPlaying = false
+				return m, func() tea.Msg {
+					return SongFinishedMsg{}
+				}
+			}
+			m.wasPlaying = m.isPlaying
 		}
-		// Continue ticking for real-time updates
+
+		if m.showVolumeBar && time.Since(m.lastVolumeChange) > 2*time.Second {
+			m.showVolumeBar = false
+		}
+
 		return m, tea.Tick(time.Millisecond*200, func(t time.Time) tea.Msg {
 			return TickMsg{Time: t}
 		})
@@ -157,7 +172,7 @@ func (m *PlayerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch msg.String() {
 		case " ", "p":
-			// Toggle play/pause
+
 			if m.isPlaying {
 				err := m.audioPlayer.Pause()
 				if err != nil {
@@ -172,7 +187,7 @@ func (m *PlayerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updatePlaybackStatus()
 
 		case "s":
-			// Stop
+
 			err := m.audioPlayer.Stop()
 			if err != nil {
 				m.errorMsg = err.Error()
@@ -180,40 +195,100 @@ func (m *PlayerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updatePlaybackStatus()
 
 		case "left", "h":
-			// Seek backward 10 seconds
+
 			currentPos := m.audioPlayer.GetPlaybackPosition()
-			newPos := currentPos - 10*time.Second
-			if newPos < 0 {
-				newPos = 0
-			}
+			newPos := max(currentPos-10*time.Second, 0)
 			err := m.audioPlayer.Seek(newPos)
 			if err != nil {
 				m.errorMsg = err.Error()
+			} else {
+				m.updatePlaybackStatus()
 			}
 
 		case "right", "l":
-			// Seek forward 10 seconds
+
 			currentPos := m.audioPlayer.GetPlaybackPosition()
-			newPos := currentPos + 10*time.Second
-			if newPos > m.totalDuration {
-				newPos = m.totalDuration
-			}
+			newPos := min(currentPos+10*time.Second, m.totalDuration)
 			err := m.audioPlayer.Seek(newPos)
 			if err != nil {
 				m.errorMsg = err.Error()
+			} else {
+				m.updatePlaybackStatus()
+			}
+
+		case "shift+left", "shift+h", "H":
+
+			return m, func() tea.Msg {
+				return PrevTrackMsg{}
+			}
+
+		case "shift+right", "shift+l", "L":
+
+			return m, func() tea.Msg {
+				return NextTrackMsg{}
 			}
 
 		case "0":
-			// Seek to beginning
+
 			err := m.audioPlayer.Seek(0)
 			if err != nil {
 				m.errorMsg = err.Error()
+			} else {
+				m.updatePlaybackStatus()
 			}
 
 		case "d":
-			// Debug: Show terminal capabilities
+
 			if m.albumArtRenderer != nil {
 				m.errorMsg = "Terminal Info:\n" + m.albumArtRenderer.GetTerminalInfo()
+			}
+
+		case "up", "=":
+			newVolume := min(m.volume+0.1, 1.0)
+			err := m.audioPlayer.SetVolume(newVolume)
+			if err != nil {
+				m.errorMsg = err.Error()
+			} else {
+				m.volume = newVolume
+				m.lastVolumeChange = time.Now()
+				m.showVolumeBar = true
+				m.errorMsg = ""
+			}
+
+		case "down", "-":
+			newVolume := max(m.volume-0.1, 0.0)
+			err := m.audioPlayer.SetVolume(newVolume)
+			if err != nil {
+				m.errorMsg = err.Error()
+			} else {
+				m.volume = newVolume
+				m.lastVolumeChange = time.Now()
+				m.showVolumeBar = true
+				m.errorMsg = ""
+			}
+
+		case "m":
+			if m.volume > 0 {
+				err := m.audioPlayer.SetVolume(0.0)
+				if err != nil {
+					m.errorMsg = err.Error()
+				} else {
+					m.volume = 0.0
+					m.lastVolumeChange = time.Now()
+					m.showVolumeBar = true
+					m.errorMsg = ""
+				}
+			} else {
+
+				err := m.audioPlayer.SetVolume(0.7)
+				if err != nil {
+					m.errorMsg = err.Error()
+				} else {
+					m.volume = 0.7
+					m.lastVolumeChange = time.Now()
+					m.showVolumeBar = true
+					m.errorMsg = ""
+				}
 			}
 		}
 	}
@@ -221,7 +296,6 @@ func (m *PlayerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// updatePlaybackStatus updates the current playback status
 func (m *PlayerModel) updatePlaybackStatus() {
 	if m.audioPlayer == nil {
 		return
@@ -230,142 +304,190 @@ func (m *PlayerModel) updatePlaybackStatus() {
 	m.isPlaying = m.audioPlayer.IsPlaying()
 	m.position = m.audioPlayer.GetPlaybackPosition()
 	m.totalDuration = m.audioPlayer.GetTotalLength()
+	m.lastUpdate = time.Now()
 }
 
-// View renders the player view
 func (m *PlayerModel) View() string {
 	var content strings.Builder
 
-	// Title
-	content.WriteString(m.styles.Title.Render("🎵 Now Playing"))
+	if m.currentSong == nil {
+
+		centerStyle := lipgloss.NewStyle().
+			Width(m.width).
+			Align(lipgloss.Center).
+			Margin(2, 0)
+
+		content.WriteString(centerStyle.Render("No song selected"))
+		content.WriteString("\n\n")
+
+		helpStyle := lipgloss.NewStyle().
+			Width(m.width).
+			Align(lipgloss.Center).
+			Foreground(lipgloss.Color("#626262"))
+		content.WriteString(helpStyle.Render("Press Esc or 'q' to go back to library"))
+		content.WriteString("\n")
+		content.WriteString(helpStyle.Render("Controls: Space/p:play/pause • ←/→/h/l:seek • Shift+←/→/h/l:prev/next track • ↑/↓/+/-:volume • m:mute"))
+
+		return content.String()
+	}
+
+	dominantColor := m.albumArtRenderer.ExtractDominantColor(*m.currentSong)
+
+	availableHeight := m.height - 5
+	contentHeight := 20
+	topPadding := max((availableHeight-contentHeight)/2, 2)
+
+	for range topPadding {
+		content.WriteString("\n")
+	}
+
+	albumArt := m.albumArtRenderer.RenderAlbumArt(*m.currentSong)
+	albumArtLines := strings.SplitSeq(albumArt, "\n")
+	for line := range albumArtLines {
+		if line != "" {
+			centerStyle := lipgloss.NewStyle().
+				Width(m.width).
+				Align(lipgloss.Center)
+			content.WriteString(centerStyle.Render(line))
+		}
+		content.WriteString("\n")
+	}
+
+	titleStyle := lipgloss.NewStyle().
+		Width(m.width).
+		Align(lipgloss.Center).
+		Foreground(lipgloss.Color("#FAFAFA")).
+		Bold(true)
+	content.WriteString(titleStyle.Render(m.currentSong.Title))
+	content.WriteString("\n")
+
+	artistStyle := lipgloss.NewStyle().
+		Width(m.width).
+		Align(lipgloss.Center).
+		Foreground(lipgloss.Color(dominantColor))
+	content.WriteString(artistStyle.Render(m.currentSong.Artist))
 	content.WriteString("\n\n")
 
-	if m.currentSong == nil {
-		content.WriteString(m.styles.Metadata.Render("No song selected"))
-		content.WriteString("\n\n")
-		content.WriteString(m.styles.Help.Render("Press Esc or 'q' to go back to library"))
-		return m.styles.Container.Render(content.String())
-	}
-
-	// Create two-column layout: album art on left, metadata on right
-	var leftColumn, rightColumn strings.Builder
-
-	// Left column: Album art
-	albumArt := m.albumArtRenderer.RenderAlbumArt(*m.currentSong)
-	leftColumn.WriteString(albumArt)
-
-	// Right column: Song metadata
-	rightColumn.WriteString(m.styles.MetadataLabel.Render("Title: "))
-	rightColumn.WriteString(m.styles.Metadata.Render(m.currentSong.Title))
-	rightColumn.WriteString("\n")
-
-	rightColumn.WriteString(m.styles.MetadataLabel.Render("Artist: "))
-	rightColumn.WriteString(m.styles.Metadata.Render(m.currentSong.Artist))
-	rightColumn.WriteString("\n")
-
-	if m.currentSong.Album != "" {
-		rightColumn.WriteString(m.styles.MetadataLabel.Render("Album: "))
-		rightColumn.WriteString(m.styles.Metadata.Render(m.currentSong.Album))
-		rightColumn.WriteString("\n")
-	}
-
-	if m.currentSong.Genre != "" {
-		rightColumn.WriteString(m.styles.MetadataLabel.Render("Genre: "))
-		rightColumn.WriteString(m.styles.Metadata.Render(m.currentSong.Genre))
-		rightColumn.WriteString("\n")
-	}
-
-	rightColumn.WriteString("\n")
-
-	// Playback status
-	statusIcon := "⏸️"
-	statusText := "Paused"
-	if m.isPlaying {
-		statusIcon = "▶️"
-		statusText = "Playing"
-	}
-
-	rightColumn.WriteString(m.styles.Controls.Render(fmt.Sprintf("%s %s", statusIcon, statusText)))
-	rightColumn.WriteString("\n\n")
-
-	// Combine columns side by side if there's enough width
-	if m.width >= 80 {
-		leftStyle := lipgloss.NewStyle().Width(30).Align(lipgloss.Center)
-		rightStyle := lipgloss.NewStyle().Width(m.width - 40).Align(lipgloss.Left)
-
-		columns := lipgloss.JoinHorizontal(
-			lipgloss.Top,
-			leftStyle.Render(leftColumn.String()),
-			rightStyle.Render(rightColumn.String()),
-		)
-		content.WriteString(columns)
-	} else {
-		// Stack vertically for narrow screens
-		content.WriteString(leftColumn.String())
-		content.WriteString("\n")
-		content.WriteString(rightColumn.String())
-	}
-
-	content.WriteString("\n")
-
-	// Progress bar and time
 	if m.totalDuration > 0 {
-		progressWidth := m.width - 20
-		if progressWidth < 20 {
-			progressWidth = 20
-		}
-		if progressWidth > 60 {
-			progressWidth = 60
-		}
+		progressWidth := 40
 
-		fillWidth := int(float64(progressWidth) * float64(m.position) / float64(m.totalDuration))
-		if fillWidth > progressWidth {
-			fillWidth = progressWidth
+		progress := float64(m.position) / float64(m.totalDuration)
+		if progress > 1.0 {
+			progress = 1.0
 		}
 
-		// Progress bar
-		fill := strings.Repeat("█", fillWidth)
-		empty := strings.Repeat("░", progressWidth-fillWidth)
-		progressBar := m.styles.ProgressFill.Render(fill) + m.styles.ProgressBar.Render(empty)
+		progressBar := m.generateStableProgressBar(progressWidth, progress, dominantColor)
 
-		content.WriteString(progressBar)
-		content.WriteString("\n")
-
-		// Time display
-		positionStr := formatDuration(m.position)
-		totalStr := formatDuration(m.totalDuration)
-		percentage := float64(m.position) / float64(m.totalDuration) * 100
-
-		timeInfo := fmt.Sprintf("%s / %s (%.1f%%)", positionStr, totalStr, percentage)
-		content.WriteString(m.styles.Metadata.Render(timeInfo))
+		progressStyle := lipgloss.NewStyle().
+			Width(m.width).
+			Align(lipgloss.Center)
+		content.WriteString(progressStyle.Render(progressBar))
 		content.WriteString("\n\n")
 	}
 
-	// Error message
+	if m.showVolumeBar {
+		volumeWidth := 20
+		volumeProgress := m.volume
+		volumeBar := m.generateStableProgressBar(volumeWidth, volumeProgress, dominantColor)
+
+		volumeIcon := ""
+		if m.volume == 0 {
+			volumeIcon = ""
+		} else if m.volume < 0.5 {
+			volumeIcon = ""
+		}
+
+		volumeText := fmt.Sprintf("%s %s %d%%", volumeIcon, volumeBar, int(m.volume*100))
+		volumeStyle := lipgloss.NewStyle().
+			Width(m.width).
+			Align(lipgloss.Center).
+			Foreground(lipgloss.Color(dominantColor))
+		content.WriteString(volumeStyle.Render(volumeText))
+		content.WriteString("\n\n")
+	}
+
 	if m.errorMsg != "" {
-		content.WriteString(m.styles.Error.Render("Error: " + m.errorMsg))
-		content.WriteString("\n\n")
+		content.WriteString("\n")
+		errorStyle := lipgloss.NewStyle().
+			Width(m.width).
+			Align(lipgloss.Center).
+			Foreground(lipgloss.Color("#FF5555")).
+			Bold(true)
+		content.WriteString(errorStyle.Render("Error: " + m.errorMsg))
+		content.WriteString("\n")
 	}
 
-	// Help text
-	content.WriteString(m.styles.Help.Render("Controls: Space/p=Play/Pause • s=Stop • ←/→=Seek±10s • 0=Beginning • d=Debug"))
-	content.WriteString("\n")
-	content.WriteString(m.styles.Help.Render("Navigation: Esc/q=Back to Library"))
-
-	return m.styles.Container.Render(content.String())
+	return content.String()
 }
 
-// formatDuration formats a duration for display
-func formatDuration(d time.Duration) string {
-	d = d.Round(time.Second)
-	h := d / time.Hour
-	d -= h * time.Hour
-	m := d / time.Minute
-	d -= m * time.Minute
-	s := d / time.Second
+func (m *PlayerModel) darkenColor(hexColor string, factor float64) string {
 
-	if h > 0 {
-		return fmt.Sprintf("%02d:%02d:%02d", h, m, s)
+	if hexColor[0] == '#' {
+		hexColor = hexColor[1:]
 	}
-	return fmt.Sprintf("%02d:%02d", m, s)
+
+	var r, g, b int
+	fmt.Sscanf(hexColor, "%02x%02x%02x", &r, &g, &b)
+
+	r = int(float64(r) * factor)
+	g = int(float64(g) * factor)
+	b = int(float64(b) * factor)
+
+	if r < 0 {
+		r = 0
+	}
+	if g < 0 {
+		g = 0
+	}
+	if b < 0 {
+		b = 0
+	}
+
+	return fmt.Sprintf("#%02X%02X%02X", r, g, b)
+}
+
+func (m *PlayerModel) generateStableProgressBar(width int, progress float64, dominantColor string) string {
+
+	blocks := []string{"░", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"}
+
+	exactPos := progress * float64(width)
+	filledColor := dominantColor
+	emptyColor := m.darkenColor(dominantColor, 0.7)
+
+	filledStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(filledColor))
+	emptyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(emptyColor))
+
+	var finalBar strings.Builder
+
+	for i := range width {
+		charProgress := exactPos - float64(i)
+
+		var char string
+		var style lipgloss.Style
+
+		if charProgress <= 0 {
+
+			char = "░"
+			style = emptyStyle
+		} else if charProgress >= 1.0 {
+
+			char = "█"
+			style = filledStyle
+		} else {
+
+			blockIndex := int(charProgress*8) + 1
+			if blockIndex > 8 {
+				blockIndex = 8
+			}
+			if blockIndex < 1 {
+				blockIndex = 1
+			}
+			char = blocks[blockIndex]
+			style = filledStyle
+		}
+
+		finalBar.WriteString(style.Render(char))
+	}
+
+	return finalBar.String()
 }

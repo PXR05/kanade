@@ -13,7 +13,6 @@ import (
 	"github.com/gopxl/beep/v2/wav"
 )
 
-// Player represents an audio player with basic playback controls
 type Player struct {
 	mu             sync.RWMutex
 	streamer       beep.StreamSeekCloser
@@ -26,36 +25,28 @@ type Player struct {
 	totalLength    time.Duration
 	startTime      time.Time
 	pausedPosition time.Duration
-	sampleOffset   int     // Track sample offset for accurate position
-	volumeLevel    float64 // Store volume level for persistence
+	sampleOffset   int
+	volumeLevel    float64
 }
 
-// NewPlayer creates a new audio player instance
 func NewPlayer() *Player {
 	return &Player{}
 }
 
-// Load loads an audio file for playback
 func (p *Player) Load(filePath string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	// Close existing streamer if any
 	if p.streamer != nil {
 		p.streamer.Close()
 	}
-
-	// Open the audio file
 	file, err := os.Open(filePath)
 	if err != nil {
 		return fmt.Errorf("failed to open file: %w", err)
 	}
 
-	// Determine file type and decode accordingly
 	var streamer beep.StreamSeekCloser
 	var format beep.Format
-
-	// Get file extension to determine decoder
 	ext := getFileExtension(filePath)
 	switch ext {
 	case ".mp3":
@@ -72,10 +63,8 @@ func (p *Player) Load(filePath string) error {
 		return fmt.Errorf("failed to decode audio: %w", err)
 	}
 
-	// Initialize speaker if not already done or if format changed
 	if !p.isInitialized || p.format.SampleRate != format.SampleRate {
-		// Use a more conservative buffer size
-		bufferSize := format.SampleRate.N(time.Second / 20) // 50ms buffer
+		bufferSize := format.SampleRate.N(time.Second / 20)
 		if bufferSize < 1024 {
 			bufferSize = 1024
 		}
@@ -88,13 +77,11 @@ func (p *Player) Load(filePath string) error {
 		p.isInitialized = true
 	}
 
-	// Create control wrapper
 	p.streamer = streamer
 	p.format = format
 	p.ctrl = &beep.Ctrl{Streamer: streamer}
 	p.volume = &effects.Volume{Streamer: p.ctrl, Base: 2}
 
-	// Restore volume level if it was set before
 	if p.volumeLevel > 0 {
 		p.setVolumeUnsafe(p.volumeLevel)
 	}
@@ -103,15 +90,12 @@ func (p *Player) Load(filePath string) error {
 	p.isPlaying = false
 	p.pausedPosition = 0
 	p.sampleOffset = 0
-
-	// Calculate total length
 	totalSamples := streamer.Len()
 	p.totalLength = format.SampleRate.D(totalSamples)
 
 	return nil
 }
 
-// Play starts or resumes playback
 func (p *Player) Play() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -121,13 +105,10 @@ func (p *Player) Play() error {
 	}
 
 	if p.isPlaying {
-		return nil // Already playing
+		return nil
 	}
 
-	// Clear any existing audio from the speaker buffer
 	speaker.Clear()
-
-	// Seek to paused position if resuming
 	if p.pausedPosition > 0 {
 		samplePos := p.format.SampleRate.N(p.pausedPosition)
 		err := p.streamer.Seek(samplePos)
@@ -137,16 +118,12 @@ func (p *Player) Play() error {
 		p.sampleOffset = samplePos
 	}
 
-	// Create a fresh control wrapper to avoid buffer corruption
 	p.ctrl = &beep.Ctrl{Streamer: p.streamer}
 	p.volume = &effects.Volume{Streamer: p.ctrl, Base: 2}
 
-	// Restore volume setting
 	if p.volumeLevel > 0 {
 		p.setVolumeUnsafe(p.volumeLevel)
 	}
-
-	// Start playback
 	speaker.Play(p.volume)
 	p.ctrl.Paused = false
 	p.isPlaying = true
@@ -155,7 +132,6 @@ func (p *Player) Play() error {
 	return nil
 }
 
-// Pause pauses the playback
 func (p *Player) Pause() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -164,17 +140,13 @@ func (p *Player) Pause() error {
 		return fmt.Errorf("not currently playing")
 	}
 
-	// Update paused position before stopping
 	p.pausedPosition = p.getCurrentPositionUnsafe()
-
-	// Stop playback and clear the buffer completely
 	speaker.Clear()
 	p.isPlaying = false
 
 	return nil
 }
 
-// Stop stops the playback and resets position
 func (p *Player) Stop() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -183,13 +155,10 @@ func (p *Player) Stop() error {
 		return fmt.Errorf("no file loaded")
 	}
 
-	// Clear the speaker buffer completely
 	speaker.Clear()
 	p.isPlaying = false
 	p.pausedPosition = 0
 	p.sampleOffset = 0
-
-	// Reset to beginning
 	err := p.streamer.Seek(0)
 	if err != nil {
 		return fmt.Errorf("failed to reset position: %w", err)
@@ -198,7 +167,6 @@ func (p *Player) Stop() error {
 	return nil
 }
 
-// Seek seeks to a specific position in the audio
 func (p *Player) Seek(position time.Duration) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -226,7 +194,6 @@ func (p *Player) Seek(position time.Duration) error {
 	return nil
 }
 
-// GetPlaybackPosition returns the current playback position
 func (p *Player) GetPlaybackPosition() time.Duration {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -234,17 +201,13 @@ func (p *Player) GetPlaybackPosition() time.Duration {
 	return p.getCurrentPositionUnsafe()
 }
 
-// getCurrentPositionUnsafe calculates current position (must be called with lock held)
 func (p *Player) getCurrentPositionUnsafe() time.Duration {
 	if !p.isPlaying {
 		return p.pausedPosition
 	}
 
-	// Calculate position based on time elapsed since play started
 	elapsed := time.Since(p.startTime)
 	currentPos := p.pausedPosition + elapsed
-
-	// Ensure we don't exceed total duration
 	if currentPos > p.totalLength {
 		currentPos = p.totalLength
 	}
@@ -252,12 +215,10 @@ func (p *Player) getCurrentPositionUnsafe() time.Duration {
 	return currentPos
 }
 
-// getCurrentPosition is the public version that requires lock
 func (p *Player) getCurrentPosition() time.Duration {
 	return p.getCurrentPositionUnsafe()
 }
 
-// IsPlaying returns whether the player is currently playing
 func (p *Player) IsPlaying() bool {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -265,7 +226,6 @@ func (p *Player) IsPlaying() bool {
 	return p.isPlaying
 }
 
-// GetTotalLength returns the total length of the loaded audio
 func (p *Player) GetTotalLength() time.Duration {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -273,7 +233,6 @@ func (p *Player) GetTotalLength() time.Duration {
 	return p.totalLength
 }
 
-// GetCurrentFile returns the path of the currently loaded file
 func (p *Player) GetCurrentFile() string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -281,7 +240,6 @@ func (p *Player) GetCurrentFile() string {
 	return p.currentFile
 }
 
-// SetVolume sets the playback volume (0.0 to 1.0)
 func (p *Player) SetVolume(volume float64) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -289,7 +247,6 @@ func (p *Player) SetVolume(volume float64) error {
 	return p.setVolumeUnsafe(volume)
 }
 
-// setVolumeUnsafe sets volume without locking (must be called with lock held)
 func (p *Player) setVolumeUnsafe(volume float64) error {
 	if volume < 0 || volume > 1 {
 		return fmt.Errorf("volume must be between 0.0 and 1.0")
@@ -298,21 +255,18 @@ func (p *Player) setVolumeUnsafe(volume float64) error {
 	p.volumeLevel = volume
 
 	if p.volume == nil {
-		return nil // Volume will be set when streamer is created
+		return nil
 	}
-
-	// Convert to decibels
 	if volume == 0 {
 		p.volume.Silent = true
 	} else {
 		p.volume.Silent = false
-		p.volume.Volume = volume - 1 // beep uses -1 to 0 range
+		p.volume.Volume = volume - 1
 	}
 
 	return nil
 }
 
-// Close closes the player and releases resources
 func (p *Player) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -326,7 +280,6 @@ func (p *Player) Close() error {
 	return nil
 }
 
-// getFileExtension is a helper function to extract file extension
 func getFileExtension(filePath string) string {
 	for i := len(filePath) - 1; i >= 0; i-- {
 		if filePath[i] == '.' {

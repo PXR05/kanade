@@ -4,10 +4,9 @@ import (
 	"bytes"
 	"fmt"
 	"image"
-	"image/color"
-	_ "image/gif"  // Import for gif support
-	_ "image/jpeg" // Import for jpeg support
-	_ "image/png"  // Import for png support
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"strings"
 
 	lib "gmp/library"
@@ -15,7 +14,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// AlbumArtRenderer handles rendering album art using the best available protocol
 type AlbumArtRenderer struct {
 	width        int
 	height       int
@@ -23,7 +21,6 @@ type AlbumArtRenderer struct {
 	renderer     ImageRenderer
 }
 
-// NewAlbumArtRenderer creates a new album art renderer with terminal detection
 func NewAlbumArtRenderer(width, height int) *AlbumArtRenderer {
 	caps := DetectTerminalCapabilities()
 
@@ -40,38 +37,112 @@ func NewAlbumArtRenderer(width, height int) *AlbumArtRenderer {
 	}
 }
 
-// RenderAlbumArt renders album art using the best available protocol
+func (r *AlbumArtRenderer) ExtractDominantColor(song lib.Song) string {
+	if song.Picture == nil || song.Picture.Data == nil || len(song.Picture.Data) == 0 {
+
+		return "#7D56F4"
+	}
+
+	img, _, err := image.Decode(bytes.NewReader(song.Picture.Data))
+	if err != nil {
+
+		return "#7D56F4"
+	}
+
+	dominantColor := getDominantColorAdvanced(img)
+
+	return fmt.Sprintf("#%02X%02X%02X", dominantColor.R, dominantColor.G, dominantColor.B)
+}
+
+func getDominantColorAdvanced(img image.Image) struct{ R, G, B uint8 } {
+	bounds := img.Bounds()
+	colorMap := make(map[uint32]int)
+
+	for y := bounds.Min.Y; y < bounds.Max.Y; y += 5 {
+		for x := bounds.Min.X; x < bounds.Max.X; x += 5 {
+			c := img.At(x, y)
+			r, g, b, a := c.RGBA()
+
+			if a < 32768 || (r+g+b) < 32768 {
+				continue
+			}
+
+			r8 := uint8((r >> 8) & 0xF0)
+			g8 := uint8((g >> 8) & 0xF0)
+			b8 := uint8((b >> 8) & 0xF0)
+
+			colorKey := uint32(r8)<<16 | uint32(g8)<<8 | uint32(b8)
+			colorMap[colorKey]++
+		}
+	}
+
+	var maxCount int
+	var dominantColor uint32
+
+	for color, count := range colorMap {
+		if count > maxCount {
+			maxCount = count
+			dominantColor = color
+		}
+	}
+
+	if maxCount == 0 {
+
+		return struct{ R, G, B uint8 }{125, 86, 244}
+	}
+
+	r := uint8((dominantColor >> 16) & 0xFF)
+	g := uint8((dominantColor >> 8) & 0xFF)
+	b := uint8(dominantColor & 0xFF)
+
+	brightness := float64(r)*0.299 + float64(g)*0.587 + float64(b)*0.114
+
+	if brightness < 50 {
+
+		factor := 50.0 / brightness
+		if factor > 3.0 {
+			factor = 3.0
+		}
+		r = uint8(float64(r) * factor)
+		g = uint8(float64(g) * factor)
+		b = uint8(float64(b) * factor)
+	} else if brightness > 200 {
+
+		factor := 200.0 / brightness
+		r = uint8(float64(r) * factor)
+		g = uint8(float64(g) * factor)
+		b = uint8(float64(b) * factor)
+	}
+
+	return struct{ R, G, B uint8 }{r, g, b}
+}
+
 func (r *AlbumArtRenderer) RenderAlbumArt(song lib.Song) string {
 	if song.Picture == nil || song.Picture.Data == nil || len(song.Picture.Data) == 0 {
 		return r.renderPlaceholder()
 	}
 
-	// Decode the image data
 	img, format, err := image.Decode(bytes.NewReader(song.Picture.Data))
 	if err != nil {
 		return r.renderError(fmt.Sprintf("Failed to decode %s image", song.Picture.MIMEType))
 	}
 
-	// Try to render with the best available protocol
 	if r.renderer != nil {
-		// Convert dimensions to character-based measurements for terminals
-		charWidth := r.width * 8    // Approximate pixels per character width
-		charHeight := r.height * 16 // Approximate pixels per character height
+
+		charWidth := r.width * 8
+		charHeight := r.height * 16
 
 		result := r.renderer.RenderImage(img, charWidth, charHeight)
 
-		// Add a header showing which protocol is being used
 		protocol := GetProtocolName(r.capabilities.BestProtocol)
 		header := r.createProtocolHeader(protocol)
 
 		return header + "\n" + result
 	}
 
-	// Fallback to ASCII art
 	return r.imageToASCII(img, format)
 }
 
-// createProtocolHeader creates a small header showing which image protocol is in use
 func (r *AlbumArtRenderer) createProtocolHeader(protocolName string) string {
 	style := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#626262")).
@@ -82,7 +153,6 @@ func (r *AlbumArtRenderer) createProtocolHeader(protocolName string) string {
 	return style.Render(fmt.Sprintf("[ %s ]", protocolName))
 }
 
-// renderPlaceholder renders a placeholder when no album art is available
 func (r *AlbumArtRenderer) renderPlaceholder() string {
 	style := lipgloss.NewStyle().
 		Width(r.width).
@@ -95,7 +165,6 @@ func (r *AlbumArtRenderer) renderPlaceholder() string {
 	return style.Render("♪\nNo Album Art\n♪")
 }
 
-// renderError renders an error message for debugging
 func (r *AlbumArtRenderer) renderError(message string) string {
 	style := lipgloss.NewStyle().
 		Width(r.width).
@@ -105,7 +174,6 @@ func (r *AlbumArtRenderer) renderError(message string) string {
 		Align(lipgloss.Center, lipgloss.Center).
 		Foreground(lipgloss.Color("#FF5555"))
 
-	// Truncate message if too long
 	if len(message) > r.width-4 {
 		message = message[:r.width-7] + "..."
 	}
@@ -113,71 +181,87 @@ func (r *AlbumArtRenderer) renderError(message string) string {
 	return style.Render("❌\n" + message)
 }
 
-// imageToASCII converts an image to ASCII art (fallback method)
 func (r *AlbumArtRenderer) imageToASCII(img image.Image, format string) string {
 	bounds := img.Bounds()
 	originalWidth := bounds.Dx()
 	originalHeight := bounds.Dy()
 
-	// Calculate scaling factors to fit the desired dimensions
-	scaleX := float64(originalWidth) / float64(r.width)
-	scaleY := float64(originalHeight) / float64(r.height)
+	squareSize := originalWidth
+	if originalHeight < originalWidth {
+		squareSize = originalHeight
+	}
 
-	// ASCII characters ordered by darkness (light to dark)
-	asciiChars := []rune{' ', '░', '▒', '▓', '█'}
+	cropX := (originalWidth - squareSize) / 2
+	cropY := (originalHeight - squareSize) / 2
+
+	renderSize := r.width
+	if r.height < r.width {
+		renderSize = r.height
+	}
+
+	renderWidth := renderSize * 2
+	renderHeight := renderSize
+
+	scaleX := float64(squareSize) / float64(renderWidth)
+	scaleY := float64(squareSize) / float64(renderHeight)
+
+	asciiChars := []rune{' ', '·', '∙', '•', '▪', '▫', '▭', '▬', '░', '▒', '▓', '█'}
 
 	var result strings.Builder
-	result.WriteString("┌")
-	result.WriteString(strings.Repeat("─", r.width))
-	result.WriteString("┐\n")
 
-	for y := 0; y < r.height-2; y++ { // -2 for border
-		result.WriteString("│")
-		for x := 0; x < r.width; x++ {
-			// Map ASCII coordinate to image coordinate
-			imgX := int(float64(x) * scaleX)
-			imgY := int(float64(y) * scaleY)
+	for y := 0; y < renderHeight; y++ {
+		for x := 0; x < renderWidth; x++ {
 
-			// Ensure we don't go out of bounds
-			if imgX >= originalWidth {
-				imgX = originalWidth - 1
+			imgX := cropX + int(float64(x)*scaleX)
+			imgY := cropY + int(float64(y)*scaleY)
+
+			var r, g, b, count uint32
+
+			for dy := -1; dy <= 1; dy++ {
+				for dx := -1; dx <= 1; dx++ {
+					sampleX := imgX + dx
+					sampleY := imgY + dy
+
+					if sampleX >= cropX && sampleX < cropX+squareSize &&
+						sampleY >= cropY && sampleY < cropY+squareSize &&
+						sampleX >= 0 && sampleX < originalWidth &&
+						sampleY >= 0 && sampleY < originalHeight {
+						pixel := img.At(sampleX, sampleY)
+						pr, pg, pb, pa := pixel.RGBA()
+
+						if pa > 0 {
+							r += pr >> 8
+							g += pg >> 8
+							b += pb >> 8
+							count++
+						}
+					}
+				}
 			}
-			if imgY >= originalHeight {
-				imgY = originalHeight - 1
+
+			if count > 0 {
+				r /= count
+				g /= count
+				b /= count
 			}
 
-			// Get pixel color
-			pixel := img.At(imgX, imgY)
-			gray := color.GrayModel.Convert(pixel).(color.Gray)
-
-			// Map grayscale value to ASCII character
-			charIndex := int(gray.Y) * (len(asciiChars) - 1) / 255
+			brightness := float64(r)*0.299 + float64(g)*0.587 + float64(b)*0.114
+			charIndex := int(brightness * float64(len(asciiChars)-1) / 255)
 			if charIndex >= len(asciiChars) {
 				charIndex = len(asciiChars) - 1
 			}
 
-			result.WriteRune(asciiChars[charIndex])
+			hexColor := fmt.Sprintf("#%02X%02X%02X", uint8(r), uint8(g), uint8(b))
+			charStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(hexColor))
+
+			result.WriteString(charStyle.Render(string(asciiChars[charIndex])))
 		}
-		result.WriteString("│\n")
+		result.WriteString("\n")
 	}
 
-	result.WriteString("└")
-	result.WriteString(strings.Repeat("─", r.width))
-	result.WriteString("┘")
-
-	// Add header showing it's ASCII fallback
-	header := r.createProtocolHeader("ASCII Art (Fallback)")
-
-	// Apply styling
-	style := lipgloss.NewStyle().
-		BorderForeground(lipgloss.Color("#7D56F4")).
-		Padding(0, 1).
-		Foreground(lipgloss.Color("#FAFAFA"))
-
-	return header + "\n" + style.Render(result.String())
+	return result.String()
 }
 
-// GetTerminalInfo returns information about the detected terminal capabilities
 func (r *AlbumArtRenderer) GetTerminalInfo() string {
 	protocolList := make([]string, len(r.capabilities.SupportedProtocols))
 	for i, protocol := range r.capabilities.SupportedProtocols {
