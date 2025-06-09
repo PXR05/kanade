@@ -1,8 +1,10 @@
 package tui
 
 import (
+	"fmt"
 	"gmp/audio"
 	lib "gmp/library"
+	"log"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -29,6 +31,9 @@ type Model struct {
 	currentSongIndex int
 
 	selectedSong *lib.Song
+
+	lastError    error
+	errorTimeout time.Time
 }
 
 type (
@@ -57,6 +62,10 @@ type (
 	TickMsg struct {
 		Time time.Time
 	}
+
+	ErrorMsg struct {
+		Error error
+	}
 )
 
 func NewModel(library *lib.Library, audioPlayer *audio.Player) *Model {
@@ -65,7 +74,7 @@ func NewModel(library *lib.Library, audioPlayer *audio.Player) *Model {
 	libraryModel := NewLibraryModel(songs)
 	playerModel := NewPlayerModel(audioPlayer)
 
-	return &Model{
+	model := &Model{
 		currentView:      LibraryView,
 		library:          library,
 		audioPlayer:      audioPlayer,
@@ -74,6 +83,12 @@ func NewModel(library *lib.Library, audioPlayer *audio.Player) *Model {
 		libraryModel:     libraryModel,
 		playerModel:      playerModel,
 	}
+
+	audioPlayer.SetErrorCallback(func(err error) {
+		log.Printf("Audio player error: %v", err)
+	})
+
+	return model
 }
 
 func (m *Model) Init() tea.Cmd {
@@ -114,6 +129,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case ErrorMsg:
+		m.lastError = msg.Error
+		m.errorTimeout = time.Now().Add(5 * time.Second)
+
+		playerModel, playerCmd := m.playerModel.Update(PlaybackStatusMsg{
+			Error: msg.Error,
+		})
+		m.playerModel = playerModel.(*PlayerModel)
+		cmds = append(cmds, playerCmd)
+
 	case NextTrackMsg, SongFinishedMsg:
 		return m, m.playNextTrack()
 
@@ -121,47 +146,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.playPreviousTrack()
 
 	case SongSelectedMsg:
-		m.currentView = PlayerView
-
-		for i, song := range m.songs {
-			if song.Path == msg.Song.Path {
-				m.currentSongIndex = i
-				break
-			}
-		}
-
-		libraryModel, _ := m.libraryModel.Update(msg)
-		m.libraryModel = libraryModel.(*LibraryModel)
-
-		if m.selectedSong != nil && m.selectedSong.Path == msg.Song.Path {
-			playerModel, playerCmd := m.playerModel.Update(msg)
-			m.playerModel = playerModel.(*PlayerModel)
-			return m, playerCmd
-		}
-
-		m.selectedSong = &msg.Song
-
-		err := m.audioPlayer.Load(msg.Song.Path)
-		if err != nil {
-			playerModel, playerCmd := m.playerModel.Update(PlaybackStatusMsg{
-				Error: err,
-			})
-			m.playerModel = playerModel.(*PlayerModel)
-			return m, playerCmd
-		}
-
-		err = m.audioPlayer.Play()
-		if err != nil {
-			playerModel, playerCmd := m.playerModel.Update(PlaybackStatusMsg{
-				Error: err,
-			})
-			m.playerModel = playerModel.(*PlayerModel)
-			return m, playerCmd
-		}
-
-		playerModel, playerCmd := m.playerModel.Update(msg)
-		m.playerModel = playerModel.(*PlayerModel)
-		return m, playerCmd
+		return m.handleSongSelection(msg)
 
 	case SwitchViewMsg:
 		m.currentView = msg.View
@@ -183,16 +168,101 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			libraryModel, _ := m.libraryModel.Update(msg)
 			m.libraryModel = libraryModel.(*LibraryModel)
 		}
-		if _, ok := msg.(TickMsg); ok {
+
+		if tickMsg, ok := msg.(TickMsg); ok {
+
+			if m.lastError != nil && time.Now().After(m.errorTimeout) {
+				m.lastError = nil
+			}
+
+			if m.audioPlayer.HasPlaybackFinished() || m.audioPlayer.IsAtEnd() {
+				cmds = append(cmds, func() tea.Msg {
+					return SongFinishedMsg{}
+				})
+			}
+
 			statusMsg := PlaybackStatusMsg{
 				IsPlaying: m.audioPlayer.IsPlaying(),
 			}
 			libraryModel, _ := m.libraryModel.Update(statusMsg)
 			m.libraryModel = libraryModel.(*LibraryModel)
+
+			if err := m.audioPlayer.GetLastError(); err != nil && err != m.lastError {
+				cmds = append(cmds, func() tea.Msg {
+					return ErrorMsg{Error: err}
+				})
+			}
+
+			_ = tickMsg
 		}
 	}
 
 	return m, tea.Batch(cmds...)
+}
+
+func (m *Model) handleSongSelection(msg SongSelectedMsg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+
+	m.currentView = PlayerView
+
+	for i, song := range m.songs {
+		if song.Path == msg.Song.Path {
+			m.currentSongIndex = i
+			break
+		}
+	}
+
+	libraryModel, _ := m.libraryModel.Update(msg)
+	m.libraryModel = libraryModel.(*LibraryModel)
+
+	if m.selectedSong != nil && m.selectedSong.Path == msg.Song.Path {
+		playerModel, playerCmd := m.playerModel.Update(msg)
+		m.playerModel = playerModel.(*PlayerModel)
+		return m, playerCmd
+	}
+
+	m.selectedSong = &msg.Song
+
+	if err := m.loadAndPlaySong(msg.Song); err != nil {
+
+		playerModel, playerCmd := m.playerModel.Update(PlaybackStatusMsg{
+			Error: err,
+		})
+		m.playerModel = playerModel.(*PlayerModel)
+		cmds = append(cmds, playerCmd)
+
+		cmds = append(cmds, func() tea.Msg {
+			return ErrorMsg{Error: err}
+		})
+	} else {
+
+		playerModel, playerCmd := m.playerModel.Update(msg)
+		m.playerModel = playerModel.(*PlayerModel)
+		cmds = append(cmds, playerCmd)
+	}
+
+	return m, tea.Batch(cmds...)
+}
+
+func (m *Model) loadAndPlaySong(song lib.Song) error {
+
+	if song.Path == "" {
+		return fmt.Errorf("invalid song path")
+	}
+
+	if err := m.audioPlayer.Load(song.Path); err != nil {
+		return fmt.Errorf("failed to load song '%s': %w", song.Title, err)
+	}
+
+	if err := m.audioPlayer.Play(); err != nil {
+		return fmt.Errorf("failed to play song '%s': %w", song.Title, err)
+	}
+
+	return nil
+}
+
+func (m *Model) GetLastError() error {
+	return m.lastError
 }
 
 func (m *Model) View() string {

@@ -28,6 +28,9 @@ type PlayerModel struct {
 	lastUpdate       time.Time
 	albumArtRenderer *AlbumArtRenderer
 	wasPlaying       bool
+
+	lastTrackChange  time.Time
+	trackChangeDelay time.Duration
 }
 
 type PlayerStyles struct {
@@ -51,6 +54,7 @@ func NewPlayerModel(audioPlayer *audio.Player) *PlayerModel {
 		styles:           DefaultPlayerStyles(),
 		lastUpdate:       time.Now(),
 		albumArtRenderer: NewAlbumArtRenderer(20, 20),
+		trackChangeDelay: 100 * time.Millisecond,
 	}
 }
 
@@ -109,17 +113,7 @@ func (m *PlayerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 
-		artSize := 20
-		if m.width >= 120 {
-			artSize = 25
-		}
-		if m.width >= 100 {
-			artSize = 22
-		}
-		if m.width < 80 {
-			artSize = 18
-		}
-		m.albumArtRenderer = NewAlbumArtRenderer(artSize, artSize)
+		m.albumArtRenderer = NewResponsiveAlbumArtRenderer(m.width, m.height)
 		return m, nil
 
 	case SongSelectedMsg:
@@ -218,11 +212,21 @@ func (m *PlayerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "shift+left", "shift+h", "H":
 
+			if time.Since(m.lastTrackChange) < m.trackChangeDelay {
+				return m, nil
+			}
+			m.lastTrackChange = time.Now()
+
 			return m, func() tea.Msg {
 				return PrevTrackMsg{}
 			}
 
 		case "shift+right", "shift+l", "L":
+
+			if time.Since(m.lastTrackChange) < m.trackChangeDelay {
+				return m, nil
+			}
+			m.lastTrackChange = time.Now()
 
 			return m, func() tea.Msg {
 				return NextTrackMsg{}
@@ -331,7 +335,8 @@ func (m *PlayerModel) View() string {
 		return content.String()
 	}
 
-	dominantColor := m.albumArtRenderer.ExtractDominantColor(*m.currentSong)
+	rawDominantColor := m.albumArtRenderer.ExtractDominantColor(*m.currentSong)
+	dominantColor := Colors.AdjustColorForContrast(rawDominantColor)
 
 	availableHeight := m.height - 5
 	contentHeight := 20
@@ -420,39 +425,13 @@ func (m *PlayerModel) View() string {
 	return content.String()
 }
 
-func (m *PlayerModel) darkenColor(hexColor string, factor float64) string {
-
-	if hexColor[0] == '#' {
-		hexColor = hexColor[1:]
-	}
-
-	var r, g, b int
-	fmt.Sscanf(hexColor, "%02x%02x%02x", &r, &g, &b)
-
-	r = int(float64(r) * factor)
-	g = int(float64(g) * factor)
-	b = int(float64(b) * factor)
-
-	if r < 0 {
-		r = 0
-	}
-	if g < 0 {
-		g = 0
-	}
-	if b < 0 {
-		b = 0
-	}
-
-	return fmt.Sprintf("#%02X%02X%02X", r, g, b)
-}
-
 func (m *PlayerModel) generateStableProgressBar(width int, progress float64, dominantColor string) string {
 
 	blocks := []string{"░", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"}
 
 	exactPos := progress * float64(width)
 	filledColor := dominantColor
-	emptyColor := m.darkenColor(dominantColor, 0.7)
+	emptyColor := Colors.DarkenColor(dominantColor, 0.7)
 
 	filledStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(filledColor))
 	emptyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(emptyColor))

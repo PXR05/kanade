@@ -63,22 +63,25 @@ func DefaultLibraryStyles() LibraryStyles {
 }
 
 func (m *LibraryModel) GetColoredStyles(dominantColor string) LibraryStyles {
+	adjustedColor := Colors.AdjustColorForContrast(dominantColor)
+	backgroundAdjustedColor := Colors.DarkenColor(adjustedColor, 0.4)
+
 	return LibraryStyles{
 		Title: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#FAFAFA")).
 			Bold(true).
 			Margin(1, 0),
 		Header: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(dominantColor)).
+			Foreground(lipgloss.Color(adjustedColor)).
 			Margin(1, 0),
 		Selected: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#FAFAFA")).
-			Background(lipgloss.Color(dominantColor)).
+			Background(lipgloss.Color(backgroundAdjustedColor)).
 			Bold(true),
 		Normal: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#CCCCCC")),
 		Help: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(dominantColor)).
+			Foreground(lipgloss.Color(adjustedColor)).
 			Margin(1, 0),
 		Container: lipgloss.NewStyle().
 			Padding(1, 2),
@@ -94,6 +97,8 @@ func (m *LibraryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+
+		m.albumArtRenderer = NewResponsiveAlbumArtRenderer(m.width, m.height)
 		return m, nil
 
 	case SongSelectedMsg:
@@ -178,16 +183,16 @@ func (m *LibraryModel) View() string {
 	content.WriteString(currentStyles.Title.Render(titleText))
 	content.WriteString("\n\n")
 
-	visibleHeight := max(m.height - 6, 5)
+	visibleHeight := max(m.height-6, 5)
 
 	start := 0
 	end := len(m.songs)
 
 	if len(m.songs) > visibleHeight {
 		if m.cursor >= visibleHeight/2 {
-			start = min(m.cursor - visibleHeight/2, len(m.songs) - visibleHeight)
+			start = min(m.cursor-visibleHeight/2, len(m.songs)-visibleHeight)
 		}
-		end = min(start + visibleHeight, len(m.songs))
+		end = min(start+visibleHeight, len(m.songs))
 	}
 
 	for i := start; i < end; i++ {
@@ -208,18 +213,22 @@ func (m *LibraryModel) View() string {
 			}
 		}
 
-		maxWidth := max(m.width - 6, 20)
+		maxWidth := max(m.width-6, 20)
 		if len(songInfo) > maxWidth {
 			songInfo = songInfo[:maxWidth-3] + "..."
 		}
 
 		prefix := "  "
-		if m.currentSong != nil && song.Path == m.currentSong.Path {
+		isCurrentSong := m.currentSong != nil && song.Path == m.currentSong.Path
+		if isCurrentSong {
 			prefix = "♪ "
 		}
 
 		if i == m.cursor {
-			content.WriteString(currentStyles.Selected.Render(fmt.Sprintf("► %s%s", prefix[2:], songInfo)))
+			if !isCurrentSong {
+				prefix = ""
+			}
+			content.WriteString(currentStyles.Selected.Render(fmt.Sprintf("► %s%s", prefix, songInfo)))
 		} else {
 			content.WriteString(currentStyles.Normal.Render(fmt.Sprintf("%s%s", prefix, songInfo)))
 		}
@@ -227,7 +236,19 @@ func (m *LibraryModel) View() string {
 	}
 
 	content.WriteString("\n")
-	content.WriteString(currentStyles.Help.Render("↑/↓ navigate • Enter select • q quit"))
+
+	pageInfo := fmt.Sprintf("Item %d of %d", m.cursor+1, len(m.songs))
+	if len(m.songs) > visibleHeight {
+		pageInfo += fmt.Sprintf(" (showing %d-%d)", start+1, end)
+	}
+	helpText := "↑/↓ navigate • Enter select • q quit"
+
+	combinedLine := lipgloss.JoinHorizontal(lipgloss.Left,
+		currentStyles.Help.Render(pageInfo),
+		strings.Repeat(" ", max(4, m.width-len(pageInfo)-len(helpText)-8)),
+		currentStyles.Help.Render(helpText),
+	)
+	content.WriteString(combinedLine)
 
 	return content.String()
 }

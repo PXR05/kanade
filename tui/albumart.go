@@ -7,6 +7,7 @@ import (
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
+	"math"
 	"strings"
 
 	lib "gmp/library"
@@ -15,37 +16,78 @@ import (
 )
 
 type AlbumArtRenderer struct {
-	width        int
-	height       int
-	capabilities *TerminalCapabilities
-	renderer     ImageRenderer
+	width  int
+	height int
+}
+
+func CalculateOptimalSize(terminalWidth, terminalHeight int) (width, height int) {
+
+	availableWidth := terminalWidth - 10
+	availableHeight := terminalHeight - 15
+
+	if availableWidth < 20 {
+		availableWidth = 20
+	}
+	if availableHeight < 10 {
+		availableHeight = 10
+	}
+
+	var artSize int
+
+	if terminalWidth >= 140 && terminalHeight >= 40 {
+
+		artSize = min(availableWidth/3, availableHeight/2)
+		artSize = max(artSize, 25)
+		artSize = min(artSize, 40)
+	} else if terminalWidth >= 100 && terminalHeight >= 30 {
+
+		artSize = min(availableWidth/4, availableHeight/2)
+		artSize = max(artSize, 20)
+		artSize = min(artSize, 30)
+	} else if terminalWidth >= 80 && terminalHeight >= 25 {
+
+		artSize = min(availableWidth/5, availableHeight/3)
+		artSize = max(artSize, 15)
+		artSize = min(artSize, 22)
+	} else {
+
+		artSize = min(availableWidth/6, availableHeight/4)
+		artSize = max(artSize, 8)
+		artSize = min(artSize, 18)
+	}
+
+	return artSize, artSize
 }
 
 func NewAlbumArtRenderer(width, height int) *AlbumArtRenderer {
-	caps := DetectTerminalCapabilities()
-
-	var renderer ImageRenderer
-	if caps.BestProtocol != ProtocolASCII {
-		renderer = CreateImageRenderer(caps.BestProtocol)
-	}
-
 	return &AlbumArtRenderer{
-		width:        width,
-		height:       height,
-		capabilities: caps,
-		renderer:     renderer,
+		width:  width,
+		height: height,
 	}
+}
+
+func NewResponsiveAlbumArtRenderer(terminalWidth, terminalHeight int) *AlbumArtRenderer {
+	width, height := CalculateOptimalSize(terminalWidth, terminalHeight)
+	return NewAlbumArtRenderer(width, height)
+}
+
+func (r *AlbumArtRenderer) UpdateSize(width, height int) {
+	r.width = width
+	r.height = height
+}
+
+func (r *AlbumArtRenderer) UpdateSizeResponsive(terminalWidth, terminalHeight int) {
+	width, height := CalculateOptimalSize(terminalWidth, terminalHeight)
+	r.UpdateSize(width, height)
 }
 
 func (r *AlbumArtRenderer) ExtractDominantColor(song lib.Song) string {
 	if song.Picture == nil || song.Picture.Data == nil || len(song.Picture.Data) == 0 {
-
 		return "#7D56F4"
 	}
 
 	img, _, err := image.Decode(bytes.NewReader(song.Picture.Data))
 	if err != nil {
-
 		return "#7D56F4"
 	}
 
@@ -87,7 +129,6 @@ func getDominantColorAdvanced(img image.Image) struct{ R, G, B uint8 } {
 	}
 
 	if maxCount == 0 {
-
 		return struct{ R, G, B uint8 }{125, 86, 244}
 	}
 
@@ -98,16 +139,11 @@ func getDominantColorAdvanced(img image.Image) struct{ R, G, B uint8 } {
 	brightness := float64(r)*0.299 + float64(g)*0.587 + float64(b)*0.114
 
 	if brightness < 50 {
-
-		factor := 50.0 / brightness
-		if factor > 3.0 {
-			factor = 3.0
-		}
+		factor := min(50.0/brightness, 3.0)
 		r = uint8(float64(r) * factor)
 		g = uint8(float64(g) * factor)
 		b = uint8(float64(b) * factor)
 	} else if brightness > 200 {
-
 		factor := 200.0 / brightness
 		r = uint8(float64(r) * factor)
 		g = uint8(float64(g) * factor)
@@ -122,35 +158,12 @@ func (r *AlbumArtRenderer) RenderAlbumArt(song lib.Song) string {
 		return r.renderPlaceholder()
 	}
 
-	img, format, err := image.Decode(bytes.NewReader(song.Picture.Data))
+	img, _, err := image.Decode(bytes.NewReader(song.Picture.Data))
 	if err != nil {
-		return r.renderError(fmt.Sprintf("Failed to decode %s image", song.Picture.MIMEType))
+		return r.renderError("Failed to decode image")
 	}
 
-	if r.renderer != nil {
-
-		charWidth := r.width * 8
-		charHeight := r.height * 16
-
-		result := r.renderer.RenderImage(img, charWidth, charHeight)
-
-		protocol := GetProtocolName(r.capabilities.BestProtocol)
-		header := r.createProtocolHeader(protocol)
-
-		return header + "\n" + result
-	}
-
-	return r.imageToASCII(img, format)
-}
-
-func (r *AlbumArtRenderer) createProtocolHeader(protocolName string) string {
-	style := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#626262")).
-		Italic(true).
-		Width(r.width).
-		Align(lipgloss.Center)
-
-	return style.Render(fmt.Sprintf("[ %s ]", protocolName))
+	return r.imageToHighResASCII(img)
 }
 
 func (r *AlbumArtRenderer) renderPlaceholder() string {
@@ -181,59 +194,72 @@ func (r *AlbumArtRenderer) renderError(message string) string {
 	return style.Render("❌\n" + message)
 }
 
-func (r *AlbumArtRenderer) imageToASCII(img image.Image, format string) string {
+func (r *AlbumArtRenderer) imageToHighResASCII(img image.Image) string {
 	bounds := img.Bounds()
 	originalWidth := bounds.Dx()
 	originalHeight := bounds.Dy()
 
-	squareSize := originalWidth
-	if originalHeight < originalWidth {
-		squareSize = originalHeight
-	}
+	squareSize := min(originalHeight, originalWidth)
 
 	cropX := (originalWidth - squareSize) / 2
 	cropY := (originalHeight - squareSize) / 2
 
-	renderSize := r.width
-	if r.height < r.width {
-		renderSize = r.height
+	renderWidth := r.width * 2
+	renderHeight := r.height
+
+	sampleWidth := renderWidth * 3
+	sampleHeight := renderHeight * 3
+
+	scaleX := float64(squareSize) / float64(sampleWidth)
+	scaleY := float64(squareSize) / float64(sampleHeight)
+
+	asciiChars := []rune{
+		' ', '░', '▒', '▓', '█',
+		'⠀', '⠁', '⠃', '⠇', '⠏', '⠟', '⠿', '⡿', '⣿',
+		'·', '∙', '•', '◦', '○', '●', '◯',
+		'▁', '▂', '▃', '▄', '▅', '▆', '▇', '█',
+		'▏', '▎', '▍', '▌', '▋', '▊', '▉', '█',
+		'`', '.', '\'', ',', ':', ';', '"', '~', '-', '_', '=', '+', '*',
+		'<', '>', '!', '?', '/', '\\', '|', '(', ')', '[', ']', '{', '}',
+		'o', 'c', 'v', 'x', 'z', 'X', 'Y', 'U', 'J', 'C', 'L', 'Q', 'O',
+		'0', 'Z', 'm', 'w', 'q', 'p', 'd', 'b', 'k', 'h', 'a',
+		'#', '%', '&', '8', 'B', '@', '$', 'M', 'W', 'N', 'H',
 	}
-
-	renderWidth := renderSize * 2
-	renderHeight := renderSize
-
-	scaleX := float64(squareSize) / float64(renderWidth)
-	scaleY := float64(squareSize) / float64(renderHeight)
-
-	asciiChars := []rune{' ', '·', '∙', '•', '▪', '▫', '▭', '▬', '░', '▒', '▓', '█'}
 
 	var result strings.Builder
 
-	for y := 0; y < renderHeight; y++ {
-		for x := 0; x < renderWidth; x++ {
-
-			imgX := cropX + int(float64(x)*scaleX)
-			imgY := cropY + int(float64(y)*scaleY)
+	for y := range renderHeight {
+		for x := range renderWidth {
 
 			var r, g, b, count uint32
 
-			for dy := -1; dy <= 1; dy++ {
-				for dx := -1; dx <= 1; dx++ {
-					sampleX := imgX + dx
-					sampleY := imgY + dy
+			for sy := range 3 {
+				for sx := range 3 {
+					sampleX := x*3 + sx
+					sampleY := y*3 + sy
 
-					if sampleX >= cropX && sampleX < cropX+squareSize &&
-						sampleY >= cropY && sampleY < cropY+squareSize &&
-						sampleX >= 0 && sampleX < originalWidth &&
-						sampleY >= 0 && sampleY < originalHeight {
-						pixel := img.At(sampleX, sampleY)
-						pr, pg, pb, pa := pixel.RGBA()
+					imgX := cropX + int(float64(sampleX)*scaleX)
+					imgY := cropY + int(float64(sampleY)*scaleY)
 
-						if pa > 0 {
-							r += pr >> 8
-							g += pg >> 8
-							b += pb >> 8
-							count++
+					for dy := -1; dy <= 1; dy++ {
+						for dx := -1; dx <= 1; dx++ {
+							finalX := imgX + dx
+							finalY := imgY + dy
+
+							if finalX >= cropX && finalX < cropX+squareSize &&
+								finalY >= cropY && finalY < cropY+squareSize &&
+								finalX >= 0 && finalX < originalWidth &&
+								finalY >= 0 && finalY < originalHeight {
+								pixel := img.At(finalX, finalY)
+								pr, pg, pb, pa := pixel.RGBA()
+
+								if pa > 0 {
+									r += pr >> 8
+									g += pg >> 8
+									b += pb >> 8
+									count++
+								}
+							}
 						}
 					}
 				}
@@ -245,10 +271,22 @@ func (r *AlbumArtRenderer) imageToASCII(img image.Image, format string) string {
 				b /= count
 			}
 
-			brightness := float64(r)*0.299 + float64(g)*0.587 + float64(b)*0.114
+			brightness := float64(r)*0.2126 + float64(g)*0.7152 + float64(b)*0.0722
+
+			brightness = brightness / 255.0
+			if brightness <= 0.0031308 {
+				brightness = brightness * 12.92
+			} else {
+				brightness = 1.055*math.Pow(brightness, 1.0/2.4) - 0.055
+			}
+			brightness = brightness * 255.0
+
 			charIndex := int(brightness * float64(len(asciiChars)-1) / 255)
 			if charIndex >= len(asciiChars) {
 				charIndex = len(asciiChars) - 1
+			}
+			if charIndex < 0 {
+				charIndex = 0
 			}
 
 			hexColor := fmt.Sprintf("#%02X%02X%02X", uint8(r), uint8(g), uint8(b))
@@ -263,13 +301,5 @@ func (r *AlbumArtRenderer) imageToASCII(img image.Image, format string) string {
 }
 
 func (r *AlbumArtRenderer) GetTerminalInfo() string {
-	protocolList := make([]string, len(r.capabilities.SupportedProtocols))
-	for i, protocol := range r.capabilities.SupportedProtocols {
-		protocolList[i] = GetProtocolName(protocol)
-	}
-
-	return fmt.Sprintf("Terminal: %s\nSupported: %s\nUsing: %s",
-		r.capabilities.TerminalName,
-		strings.Join(protocolList, ", "),
-		GetProtocolName(r.capabilities.BestProtocol))
+	return fmt.Sprintf("Using: High-Resolution ASCII Art (%dx%d)", r.width, r.height)
 }

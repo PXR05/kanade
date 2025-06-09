@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"gmp/audio"
 	lib "gmp/library"
@@ -13,18 +15,68 @@ import (
 )
 
 func main() {
+
+	logFile, err := os.OpenFile("gmp.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	if err != nil {
+		fmt.Printf("Warning: could not open log file: %v\n", err)
+	} else {
+		defer logFile.Close()
+		log.SetOutput(logFile)
+	}
+
+	var dir string
+	if len(os.Args) > 1 {
+		dir = os.Args[1]
+		if err := os.Chdir(dir); err != nil {
+			fmt.Printf("Error changing directory to '%s': %v\n", dir, err)
+			os.Exit(1)
+		}
+	} else {
+
+		currentDir, err := os.Getwd()
+		if err != nil {
+			fmt.Printf("Error getting current directory: %v\n", err)
+			os.Exit(1)
+		}
+		dir = currentDir
+		fmt.Printf("No directory specified, using current directory: %s\n", dir)
+	}
+
 	library := &lib.Library{}
 	player := audio.NewPlayer()
-	defer player.Close()
 
-	library.ReadDir("./assets")
-	songs := library.ListSongs()
+	cleanup := func() {
+		log.Println("Shutting down...")
+		if err := player.Close(); err != nil {
+			log.Printf("Error closing audio player: %v", err)
+		}
+		log.Println("Cleanup completed")
+	}
+	defer cleanup()
 
-	if len(songs) == 0 {
-		fmt.Println("No songs found in ./assets directory")
-		fmt.Println("Please add some .mp3 or .wav files to the assets folder")
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-c
+		log.Println("Received interrupt signal")
+		cleanup()
+		os.Exit(0)
+	}()
+
+	log.Printf("Reading songs from directory: %s", dir)
+	songs, err := library.ReadDir(dir)
+	if err != nil {
+		fmt.Printf("Error reading directory '%s': %v\n", dir, err)
 		os.Exit(1)
 	}
+
+	if len(songs) == 0 {
+		fmt.Printf("No songs found in '%s'\n", dir)
+		fmt.Println("Please add some .mp3 or .wav files to the directory")
+		os.Exit(1)
+	}
+
+	log.Printf("Found %d songs", len(songs))
 
 	model := tui.NewModel(library, player)
 
@@ -34,7 +86,18 @@ func main() {
 		tea.WithMouseCellMotion(),
 	)
 
-	if _, err := p.Run(); err != nil {
-		log.Fatalf("Error running program: %v", err)
+	log.Println("Starting TUI application")
+	finalModel, err := p.Run()
+	if err != nil {
+		fmt.Printf("Error running program: %v\n", err)
+		os.Exit(1)
 	}
+
+	if model, ok := finalModel.(*tui.Model); ok {
+		if lastErr := model.GetLastError(); lastErr != nil {
+			log.Printf("Final error state: %v", lastErr)
+		}
+	}
+
+	log.Println("Application exited normally")
 }

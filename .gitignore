@@ -1,2 +1,4 @@
 assets/
 *.exe
+*.log
+gmp
