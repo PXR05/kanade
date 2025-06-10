@@ -9,11 +9,20 @@ import (
 	_ "image/png"
 	"math"
 	"strings"
+	"sync"
 
 	lib "gmp/library"
 
 	"github.com/charmbracelet/lipgloss"
 )
+
+var stringBuilderPool = sync.Pool{
+	New: func() interface{} {
+		return &strings.Builder{}
+	},
+}
+
+var styleCache = sync.Map{}
 
 type AlbumArtRenderer struct {
 	width  int
@@ -98,10 +107,19 @@ func (r *AlbumArtRenderer) ExtractDominantColor(song lib.Song) string {
 
 func getDominantColorAdvanced(img image.Image) struct{ R, G, B uint8 } {
 	bounds := img.Bounds()
-	colorMap := make(map[uint32]int)
 
-	for y := bounds.Min.Y; y < bounds.Max.Y; y += 5 {
-		for x := bounds.Min.X; x < bounds.Max.X; x += 5 {
+	colorMap := make(map[uint32]int, 1024)
+
+	minX, minY := bounds.Min.X, bounds.Min.Y
+	maxX, maxY := bounds.Max.X, bounds.Max.Y
+
+	stepSize := 3
+	if (maxY-minY)*(maxX-minX) > 400000 {
+		stepSize = 5
+	}
+
+	for y := minY; y < maxY; y += stepSize {
+		for x := minX; x < maxX; x += stepSize {
 			c := img.At(x, y)
 			r, g, b, a := c.RGBA()
 
@@ -140,9 +158,9 @@ func getDominantColorAdvanced(img image.Image) struct{ R, G, B uint8 } {
 
 	if brightness < 50 {
 		factor := min(50.0/brightness, 3.0)
-		r = uint8(float64(r) * factor)
-		g = uint8(float64(g) * factor)
-		b = uint8(float64(b) * factor)
+		r = uint8(min(float64(r)*factor, 255))
+		g = uint8(min(float64(g)*factor, 255))
+		b = uint8(min(float64(b)*factor, 255))
 	} else if brightness > 200 {
 		factor := 200.0 / brightness
 		r = uint8(float64(r) * factor)
@@ -226,39 +244,72 @@ func (r *AlbumArtRenderer) imageToHighResASCII(img image.Image) string {
 		'#', '%', '&', '8', 'B', '@', '$', 'M', 'W', 'N', 'H',
 	}
 
-	var result strings.Builder
+	asciiStrings := make([]string, len(asciiChars))
+	for i, char := range asciiChars {
+		asciiStrings[i] = string(char)
+	}
+
+	result := stringBuilderPool.Get().(*strings.Builder)
+	result.Reset()
+	result.Grow(renderHeight * renderWidth * 20)
+	defer stringBuilderPool.Put(result)
+
+	cropXPlusSquare := cropX + squareSize
+	cropYPlusSquare := cropY + squareSize
+	numChars := len(asciiChars)
+	numCharsFloat := float64(numChars - 1)
+
+	sampleCoords := make([][2]int, 25)
+	kernelCoords := make([][2]int, 9)
+
+	for sy := range 5 {
+		for sx := range 5 {
+			sampleCoords[sy*5+sx] = [2]int{sx, sy}
+		}
+	}
+
+	for dy := -1; dy <= 1; dy++ {
+		for dx := -1; dx <= 1; dx++ {
+			kernelCoords[(dy+1)*3+(dx+1)] = [2]int{dx, dy}
+		}
+	}
 
 	for y := range renderHeight {
 		for x := range renderWidth {
 
 			var r, g, b, count uint32
 
-			for sy := range 5 {
-				for sx := range 5 {
-					sampleX := x*5 + sx
-					sampleY := y*5 + sy
+			baseX := x * 5
+			baseY := y * 5
 
-					imgX := cropX + int(float64(sampleX)*scaleX)
-					imgY := cropY + int(float64(sampleY)*scaleY)
+			for i := range 25 {
+				sx, sy := sampleCoords[i][0], sampleCoords[i][1]
+				sampleX := baseX + sx
+				sampleY := baseY + sy
 
-					for dy := -1; dy <= 1; dy++ {
-						for dx := -1; dx <= 1; dx++ {
-							finalX := imgX + dx
-							finalY := imgY + dy
+				imgX := cropX + int(float64(sampleX)*scaleX)
+				imgY := cropY + int(float64(sampleY)*scaleY)
 
-							if finalX >= cropX && finalX < cropX+squareSize &&
-								finalY >= cropY && finalY < cropY+squareSize &&
-								finalX >= 0 && finalX < originalWidth &&
-								finalY >= 0 && finalY < originalHeight {
-								pixel := img.At(finalX, finalY)
-								pr, pg, pb, pa := pixel.RGBA()
+				if imgX >= cropX && imgX < cropXPlusSquare &&
+					imgY >= cropY && imgY < cropYPlusSquare {
 
-								if pa > 0 {
-									r += pr >> 8
-									g += pg >> 8
-									b += pb >> 8
-									count++
-								}
+					for j := range 9 {
+						dx, dy := kernelCoords[j][0], kernelCoords[j][1]
+						finalX := imgX + dx
+						finalY := imgY + dy
+
+						if finalX >= cropX && finalX < cropXPlusSquare &&
+							finalY >= cropY && finalY < cropYPlusSquare &&
+							finalX >= 0 && finalX < originalWidth &&
+							finalY >= 0 && finalY < originalHeight {
+							pixel := img.At(finalX, finalY)
+							pr, pg, pb, pa := pixel.RGBA()
+
+							if pa > 0 {
+								r += pr >> 8
+								g += pg >> 8
+								b += pb >> 8
+								count++
 							}
 						}
 					}
@@ -279,20 +330,26 @@ func (r *AlbumArtRenderer) imageToHighResASCII(img image.Image) string {
 			} else {
 				brightness = 1.055*math.Pow(brightness, 1.0/2.4) - 0.055
 			}
-			brightness = brightness * 255.0
 
-			charIndex := int(brightness * float64(len(asciiChars)-1) / 255)
-			if charIndex >= len(asciiChars) {
-				charIndex = len(asciiChars) - 1
+			charIndex := int(brightness * numCharsFloat)
+			if charIndex >= numChars {
+				charIndex = numChars - 1
 			}
 			if charIndex < 0 {
 				charIndex = 0
 			}
 
 			hexColor := fmt.Sprintf("#%02X%02X%02X", uint8(r), uint8(g), uint8(b))
-			charStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(hexColor))
 
-			result.WriteString(charStyle.Render(string(asciiChars[charIndex])))
+			var charStyle lipgloss.Style
+			if cached, ok := styleCache.Load(hexColor); ok {
+				charStyle = cached.(lipgloss.Style)
+			} else {
+				charStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(hexColor))
+				styleCache.Store(hexColor, charStyle)
+			}
+
+			result.WriteString(charStyle.Render(asciiStrings[charIndex]))
 		}
 		result.WriteString("\n")
 	}

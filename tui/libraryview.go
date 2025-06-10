@@ -12,6 +12,7 @@ import (
 
 type LibraryModel struct {
 	songs            []lib.Song
+	filteredSongs    []lib.Song
 	cursor           int
 	width            int
 	height           int
@@ -19,6 +20,8 @@ type LibraryModel struct {
 	currentSong      *lib.Song
 	isPlaying        bool
 	albumArtRenderer *AlbumArtRenderer
+	searchMode       bool
+	searchQuery      string
 }
 
 type LibraryStyles struct {
@@ -33,9 +36,12 @@ type LibraryStyles struct {
 func NewLibraryModel(songs []lib.Song) *LibraryModel {
 	return &LibraryModel{
 		songs:            songs,
+		filteredSongs:    songs,
 		cursor:           0,
 		styles:           DefaultLibraryStyles(),
 		albumArtRenderer: NewAlbumArtRenderer(20, 20),
+		searchMode:       false,
+		searchQuery:      "",
 	}
 }
 
@@ -88,6 +94,30 @@ func (m *LibraryModel) GetColoredStyles(dominantColor string) LibraryStyles {
 	}
 }
 
+func (m *LibraryModel) filterSongs() {
+	if m.searchQuery == "" {
+		m.filteredSongs = m.songs
+		return
+	}
+
+	query := strings.ToLower(m.searchQuery)
+	var filtered []lib.Song
+
+	for _, song := range m.songs {
+
+		searchText := strings.ToLower(song.Artist + " " + song.Title + " " + song.Path)
+		if strings.Contains(searchText, query) {
+			filtered = append(filtered, song)
+		}
+	}
+
+	m.filteredSongs = filtered
+
+	if m.cursor >= len(m.filteredSongs) {
+		m.cursor = max(0, len(m.filteredSongs)-1)
+	}
+}
+
 func (m *LibraryModel) Init() tea.Cmd {
 	return nil
 }
@@ -113,8 +143,44 @@ func (m *LibraryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		switch msg.String() {
+		case "/":
+			if !m.searchMode {
+				m.searchMode = true
+				m.searchQuery = ""
+				return m, nil
+			}
+
+		case "esc":
+			if m.searchMode {
+				m.searchMode = false
+				m.searchQuery = ""
+				m.filteredSongs = m.songs
+				m.cursor = 0
+				return m, nil
+			}
+
+		case "enter":
+			if m.searchMode {
+				m.searchMode = false
+				return m, nil
+			}
+			if len(m.filteredSongs) > 0 && m.cursor < len(m.filteredSongs) {
+				return m, func() tea.Msg {
+					return SongSelectedMsg{Song: m.filteredSongs[m.cursor]}
+				}
+			}
+
+		case "backspace":
+			if m.searchMode && len(m.searchQuery) > 0 {
+				m.searchQuery = m.searchQuery[:len(m.searchQuery)-1]
+				m.filterSongs()
+				return m, nil
+			}
+
 		case "tab":
-			// Switch to player view if a song is currently selected/playing
+			if m.searchMode {
+				return m, nil
+			}
 			if m.currentSong != nil {
 				return m, func() tea.Msg {
 					return SwitchViewMsg{View: PlayerView}
@@ -122,24 +188,48 @@ func (m *LibraryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "up", "k":
+			if m.searchMode {
+				return m, nil
+			}
 			if m.cursor > 0 {
 				m.cursor--
 			}
 		case "down", "j":
-			if m.cursor < len(m.songs)-1 {
+			if m.searchMode {
+				return m, nil
+			}
+			if m.cursor < len(m.filteredSongs)-1 {
 				m.cursor++
 			}
-		case "enter", " ":
-			if len(m.songs) > 0 && m.cursor < len(m.songs) {
-
+		case " ":
+			if m.searchMode {
+				m.searchQuery += " "
+				m.filterSongs()
+				return m, nil
+			}
+			if len(m.filteredSongs) > 0 && m.cursor < len(m.filteredSongs) {
 				return m, func() tea.Msg {
-					return SongSelectedMsg{Song: m.songs[m.cursor]}
+					return SongSelectedMsg{Song: m.filteredSongs[m.cursor]}
 				}
 			}
 		case "home", "g":
+			if m.searchMode {
+				return m, nil
+			}
 			m.cursor = 0
 		case "end", "G":
-			m.cursor = len(m.songs) - 1
+			if m.searchMode {
+				return m, nil
+			}
+			m.cursor = len(m.filteredSongs) - 1
+
+		default:
+
+			if m.searchMode && len(msg.String()) == 1 {
+				m.searchQuery += msg.String()
+				m.filterSongs()
+				return m, nil
+			}
 		}
 	}
 
@@ -158,17 +248,15 @@ func (m *LibraryModel) View() string {
 
 	var currentStyles LibraryStyles
 	if m.currentSong != nil && m.albumArtRenderer != nil {
-
 		dominantColor := m.albumArtRenderer.ExtractDominantColor(*m.currentSong)
 		currentStyles = m.GetColoredStyles(dominantColor)
 	} else {
-
 		currentStyles = m.styles
 	}
 
 	if len(m.songs) == 0 {
 		var content strings.Builder
-		content.WriteString(currentStyles.Title.Render("Music Library"))
+		content.WriteString(currentStyles.Title.Render("GMP"))
 		content.WriteString("\n\n")
 		content.WriteString(currentStyles.Normal.Render("No songs found"))
 		content.WriteString("\n")
@@ -180,31 +268,59 @@ func (m *LibraryModel) View() string {
 
 	var content strings.Builder
 
-	titleText := "Music Library"
-	if m.currentSong != nil {
-		playIcon := "⏸"
-		if m.isPlaying {
-			playIcon = "▶"
+	if m.searchMode {
+		searchLine := fmt.Sprintf("Search: /%s", m.searchQuery)
+		content.WriteString(currentStyles.Title.Render(searchLine))
+	} else {
+		titleText := "GMP"
+		if m.currentSong != nil {
+			playIcon := "⏸"
+			if m.isPlaying {
+				playIcon = "▶"
+			}
+			titleText += fmt.Sprintf(" %s %s", playIcon, m.currentSong.Title)
 		}
-		titleText += fmt.Sprintf(" %s %s", playIcon, m.currentSong.Title)
+		content.WriteString(currentStyles.Title.Render(titleText))
 	}
-	content.WriteString(currentStyles.Title.Render(titleText))
-	content.WriteString("\n\n")
+	content.WriteString("\n")
 
-	visibleHeight := max(m.height-6, 5)
+	if !m.searchMode && m.searchQuery != "" {
+		searchInfo := fmt.Sprintf("Filtered by: %s (Press / to search again, Esc to clear)", m.searchQuery)
+		content.WriteString(currentStyles.Help.Render(searchInfo))
+		content.WriteString("\n")
+	}
+	content.WriteString("\n")
+
+	if len(m.filteredSongs) == 0 {
+		if m.searchQuery != "" {
+			content.WriteString(currentStyles.Normal.Render("No songs match your search"))
+			content.WriteString("\n")
+			content.WriteString(currentStyles.Help.Render("Press Esc to clear search"))
+		} else {
+			content.WriteString(currentStyles.Normal.Render("No songs found"))
+		}
+		content.WriteString("\n\n")
+		content.WriteString(currentStyles.Help.Render("Press 'q' to quit"))
+		return content.String()
+	}
+
+	visibleHeight := max(m.height-8, 5)
+	if m.searchMode || m.searchQuery != "" {
+		visibleHeight = max(m.height-9, 5)
+	}
 
 	start := 0
-	end := len(m.songs)
+	end := len(m.filteredSongs)
 
-	if len(m.songs) > visibleHeight {
+	if len(m.filteredSongs) > visibleHeight {
 		if m.cursor >= visibleHeight/2 {
-			start = min(m.cursor-visibleHeight/2, len(m.songs)-visibleHeight)
+			start = min(m.cursor-visibleHeight/2, len(m.filteredSongs)-visibleHeight)
 		}
-		end = min(start+visibleHeight, len(m.songs))
+		end = min(start+visibleHeight, len(m.filteredSongs))
 	}
 
 	for i := start; i < end; i++ {
-		song := m.songs[i]
+		song := m.filteredSongs[i]
 
 		var songInfo string
 		if song.Artist != "" && song.Title != "" {
@@ -212,7 +328,6 @@ func (m *LibraryModel) View() string {
 		} else if song.Title != "" {
 			songInfo = song.Title
 		} else {
-
 			parts := strings.Split(song.Path, "/")
 			if len(parts) > 0 {
 				songInfo = parts[len(parts)-1]
@@ -245,11 +360,17 @@ func (m *LibraryModel) View() string {
 
 	content.WriteString("\n")
 
-	pageInfo := fmt.Sprintf("Item %d of %d", m.cursor+1, len(m.songs))
-	if len(m.songs) > visibleHeight {
+	pageInfo := fmt.Sprintf("Item %d of %d", m.cursor+1, len(m.filteredSongs))
+	if len(m.filteredSongs) > visibleHeight {
 		pageInfo += fmt.Sprintf(" (showing %d-%d)", start+1, end)
 	}
-	helpText := "↑/↓ navigate • Enter select • Tab player • q quit"
+
+	var helpText string
+	if m.searchMode {
+		helpText = "Type to search • Enter confirm • Esc cancel"
+	} else {
+		helpText = "↑/↓ navigate • Enter select • / search • Tab player • q quit"
+	}
 
 	combinedLine := lipgloss.JoinHorizontal(lipgloss.Left,
 		currentStyles.Help.Render(pageInfo),

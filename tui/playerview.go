@@ -40,7 +40,6 @@ type PlayerStyles struct {
 	ProgressBar   lipgloss.Style
 	ProgressFill  lipgloss.Style
 	Controls      lipgloss.Style
-	Help          lipgloss.Style
 	Error         lipgloss.Style
 	Container     lipgloss.Style
 	PlayIcon      lipgloss.Style
@@ -81,9 +80,6 @@ func DefaultPlayerStyles() PlayerStyles {
 			Foreground(lipgloss.Color("#FAFAFA")).
 			Margin(1, 0).
 			Bold(true),
-		Help: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#626262")).
-			Margin(1, 0),
 		Error: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#FF5555")).
 			Bold(true).
@@ -329,14 +325,6 @@ func (m *PlayerModel) View() string {
 
 		content.WriteString(centerStyle.Render("No song selected"))
 		content.WriteString("\n\n")
-
-		helpStyle := lipgloss.NewStyle().
-			Width(m.width).
-			Align(lipgloss.Center).
-			Foreground(lipgloss.Color("#626262"))
-		content.WriteString(helpStyle.Render("Press Esc, 'q', or Tab to go back to library"))
-		content.WriteString("\n")
-		content.WriteString(helpStyle.Render("Controls: Space/p:play/pause • ←/→/h/l:seek • Shift+←/→/h/l:prev/next track • ↑/↓/+/-:volume • m:mute"))
 
 		return content.String()
 	}

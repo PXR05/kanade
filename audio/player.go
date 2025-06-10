@@ -181,9 +181,12 @@ func (p *Player) Load(filePath string) error {
 	if format.SampleRate != p.speakerFormat.SampleRate {
 
 		finalStreamSeekCloser = &seekWrapper{
-			Streamer: finalStreamer,
-			original: streamer,
-			length:   totalSamples,
+			Streamer:       finalStreamer,
+			original:       streamer,
+			length:         totalSamples,
+			originalFormat: format,
+			targetFormat:   finalFormat,
+			quality:        4,
 		}
 	} else {
 
@@ -213,9 +216,12 @@ func (p *Player) Load(filePath string) error {
 
 type seekWrapper struct {
 	beep.Streamer
-	original beep.StreamSeekCloser
-	length   int
-	position int
+	original       beep.StreamSeekCloser
+	length         int
+	position       int
+	originalFormat beep.Format
+	targetFormat   beep.Format
+	quality        int
 }
 
 func (s *seekWrapper) Close() error {
@@ -231,17 +237,21 @@ func (s *seekWrapper) Position() int {
 }
 
 func (s *seekWrapper) Seek(p int) error {
-
-	if p != 0 {
-		return fmt.Errorf("seeking in resampled audio is limited to position 0")
+	if p < 0 || p > s.length {
+		return fmt.Errorf("seek position out of bounds: %d (max: %d)", p, s.length)
 	}
 
-	err := s.original.Seek(0)
+	targetDuration := s.targetFormat.SampleRate.D(p)
+	originalPos := s.originalFormat.SampleRate.N(targetDuration)
+
+	err := s.original.Seek(originalPos)
 	if err != nil {
 		return err
 	}
 
-	s.position = 0
+	s.Streamer = beep.Resample(s.quality, s.originalFormat.SampleRate, s.targetFormat.SampleRate, s.original)
+	s.position = p
+
 	return nil
 }
 
@@ -366,15 +376,7 @@ func (p *Player) Seek(position time.Duration) error {
 
 	samplePos := p.format.SampleRate.N(position)
 	if err := p.streamer.Seek(samplePos); err != nil {
-
-		if position == 0 {
-
-			if err := p.streamer.Seek(0); err != nil {
-				return fmt.Errorf("failed to seek: %w", err)
-			}
-		} else {
-			return fmt.Errorf("seeking not supported for resampled audio (can only seek to position 0)")
-		}
+		return fmt.Errorf("failed to seek to position %v: %w", position, err)
 	}
 
 	p.sampleOffset = samplePos
