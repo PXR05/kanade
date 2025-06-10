@@ -55,6 +55,11 @@ type (
 		Error     error
 	}
 
+	PlaybackPositionMsg struct {
+		Position      time.Duration
+		TotalDuration time.Duration
+	}
+
 	WindowSizeMsg struct {
 		Width, Height int
 	}
@@ -121,6 +126,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.currentView = LibraryView
 				return m, nil
 			}
+
+			if m.currentView == LibraryView && m.libraryModel.IsInSearchMode() {
+				break
+			}
 			return m, tea.Quit
 		case "esc":
 			if m.currentView == PlayerView {
@@ -153,6 +162,39 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if tickMsg, ok := msg.(TickMsg); ok {
+		if m.lastError != nil && time.Now().After(m.errorTimeout) {
+			m.lastError = nil
+		}
+
+		if m.audioPlayer.HasPlaybackFinished() || m.audioPlayer.IsAtEnd() {
+			cmds = append(cmds, func() tea.Msg {
+				return SongFinishedMsg{}
+			})
+		}
+
+		statusMsg := PlaybackStatusMsg{
+			IsPlaying: m.audioPlayer.IsPlaying(),
+		}
+		libraryModel, _ := m.libraryModel.Update(statusMsg)
+		m.libraryModel = libraryModel.(*LibraryModel)
+
+		positionMsg := PlaybackPositionMsg{
+			Position:      m.audioPlayer.GetPlaybackPosition(),
+			TotalDuration: m.audioPlayer.GetTotalLength(),
+		}
+		libraryModel, _ = m.libraryModel.Update(positionMsg)
+		m.libraryModel = libraryModel.(*LibraryModel)
+
+		if err := m.audioPlayer.GetLastError(); err != nil && err != m.lastError {
+			cmds = append(cmds, func() tea.Msg {
+				return ErrorMsg{Error: err}
+			})
+		}
+
+		_ = tickMsg
+	}
+
 	switch m.currentView {
 	case LibraryView:
 		libraryModel, cmd := m.libraryModel.Update(msg)
@@ -168,33 +210,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			libraryModel, _ := m.libraryModel.Update(msg)
 			m.libraryModel = libraryModel.(*LibraryModel)
 		}
-
-		if tickMsg, ok := msg.(TickMsg); ok {
-
-			if m.lastError != nil && time.Now().After(m.errorTimeout) {
-				m.lastError = nil
-			}
-
-			if m.audioPlayer.HasPlaybackFinished() || m.audioPlayer.IsAtEnd() {
-				cmds = append(cmds, func() tea.Msg {
-					return SongFinishedMsg{}
-				})
-			}
-
-			statusMsg := PlaybackStatusMsg{
-				IsPlaying: m.audioPlayer.IsPlaying(),
-			}
-			libraryModel, _ := m.libraryModel.Update(statusMsg)
-			m.libraryModel = libraryModel.(*LibraryModel)
-
-			if err := m.audioPlayer.GetLastError(); err != nil && err != m.lastError {
-				cmds = append(cmds, func() tea.Msg {
-					return ErrorMsg{Error: err}
-				})
-			}
-
-			_ = tickMsg
-		}
 	}
 
 	return m, tea.Batch(cmds...)
@@ -205,12 +220,7 @@ func (m *Model) handleSongSelection(msg SongSelectedMsg) (tea.Model, tea.Cmd) {
 
 	m.currentView = PlayerView
 
-	for i, song := range m.songs {
-		if song.Path == msg.Song.Path {
-			m.currentSongIndex = i
-			break
-		}
-	}
+	m.currentSongIndex = m.libraryModel.FindSongIndex(msg.Song)
 
 	libraryModel, _ := m.libraryModel.Update(msg)
 	m.libraryModel = libraryModel.(*LibraryModel)
@@ -224,7 +234,6 @@ func (m *Model) handleSongSelection(msg SongSelectedMsg) (tea.Model, tea.Cmd) {
 	m.selectedSong = &msg.Song
 
 	if err := m.loadAndPlaySong(msg.Song); err != nil {
-
 		playerModel, playerCmd := m.playerModel.Update(PlaybackStatusMsg{
 			Error: err,
 		})
@@ -235,7 +244,6 @@ func (m *Model) handleSongSelection(msg SongSelectedMsg) (tea.Model, tea.Cmd) {
 			return ErrorMsg{Error: err}
 		})
 	} else {
-
 		playerModel, playerCmd := m.playerModel.Update(msg)
 		m.playerModel = playerModel.(*PlayerModel)
 		cmds = append(cmds, playerCmd)
@@ -277,18 +285,21 @@ func (m *Model) View() string {
 }
 
 func (m *Model) playNextTrack() tea.Cmd {
-	if len(m.songs) == 0 || m.currentSongIndex < 0 {
+
+	orderedSongs := m.libraryModel.GetOrderedSongs()
+
+	if len(orderedSongs) == 0 || m.currentSongIndex < 0 {
 		return nil
 	}
 
 	nextIndex := m.currentSongIndex + 1
-	if nextIndex >= len(m.songs) {
+	if nextIndex >= len(orderedSongs) {
 
 		nextIndex = 0
 	}
 
 	m.currentSongIndex = nextIndex
-	nextSong := m.songs[nextIndex]
+	nextSong := orderedSongs[nextIndex]
 
 	return func() tea.Msg {
 		return SongSelectedMsg{Song: nextSong}
@@ -296,18 +307,21 @@ func (m *Model) playNextTrack() tea.Cmd {
 }
 
 func (m *Model) playPreviousTrack() tea.Cmd {
-	if len(m.songs) == 0 || m.currentSongIndex < 0 {
+
+	orderedSongs := m.libraryModel.GetOrderedSongs()
+
+	if len(orderedSongs) == 0 || m.currentSongIndex < 0 {
 		return nil
 	}
 
 	prevIndex := m.currentSongIndex - 1
 	if prevIndex < 0 {
 
-		prevIndex = len(m.songs) - 1
+		prevIndex = len(orderedSongs) - 1
 	}
 
 	m.currentSongIndex = prevIndex
-	prevSong := m.songs[prevIndex]
+	prevSong := orderedSongs[prevIndex]
 
 	return func() tea.Msg {
 		return SongSelectedMsg{Song: prevSong}

@@ -2,13 +2,38 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
+	"time"
 
 	lib "gmp/library"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
+
+type GroupingMode int
+
+const (
+	NoGrouping GroupingMode = iota
+	GroupByAlbum
+	GroupByArtist
+)
+
+type GroupItem struct {
+	Name      string
+	Songs     []lib.Song
+	Expanded  bool
+	SongCount int
+}
+
+type ListItem struct {
+	IsGroup    bool
+	Group      *GroupItem
+	Song       *lib.Song
+	GroupIndex int
+	SongIndex  int
+}
 
 type LibraryModel struct {
 	songs            []lib.Song
@@ -22,6 +47,14 @@ type LibraryModel struct {
 	albumArtRenderer *AlbumArtRenderer
 	searchMode       bool
 	searchQuery      string
+	showHelp         bool
+	position         time.Duration
+	totalDuration    time.Duration
+
+	groupingMode   GroupingMode
+	groups         []GroupItem
+	displayItems   []ListItem
+	expandedGroups map[string]bool
 }
 
 type LibraryStyles struct {
@@ -31,10 +64,12 @@ type LibraryStyles struct {
 	Normal    lipgloss.Style
 	Help      lipgloss.Style
 	Container lipgloss.Style
+	Group     lipgloss.Style
+	GroupSong lipgloss.Style
 }
 
 func NewLibraryModel(songs []lib.Song) *LibraryModel {
-	return &LibraryModel{
+	model := &LibraryModel{
 		songs:            songs,
 		filteredSongs:    songs,
 		cursor:           0,
@@ -42,7 +77,12 @@ func NewLibraryModel(songs []lib.Song) *LibraryModel {
 		albumArtRenderer: NewAlbumArtRenderer(20, 20),
 		searchMode:       false,
 		searchQuery:      "",
+		showHelp:         false,
+		groupingMode:     NoGrouping,
+		expandedGroups:   make(map[string]bool),
 	}
+	model.rebuildDisplayItems()
+	return model
 }
 
 func DefaultLibraryStyles() LibraryStyles {
@@ -65,6 +105,11 @@ func DefaultLibraryStyles() LibraryStyles {
 			Margin(1, 0),
 		Container: lipgloss.NewStyle().
 			Padding(1, 2),
+		Group: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#CCCCCC")).
+			Bold(true),
+		GroupSong: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#999999")),
 	}
 }
 
@@ -91,35 +136,202 @@ func (m *LibraryModel) GetColoredStyles(dominantColor string) LibraryStyles {
 			Margin(1, 0),
 		Container: lipgloss.NewStyle().
 			Padding(1, 2),
+		Group: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(adjustedColor)).
+			Bold(true),
+		GroupSong: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#BBBBBB")),
 	}
 }
 
 func (m *LibraryModel) filterSongs() {
 	if m.searchQuery == "" {
 		m.filteredSongs = m.songs
+	} else {
+		query := strings.ToLower(m.searchQuery)
+		var filtered []lib.Song
+
+		for _, song := range m.songs {
+			searchText := strings.ToLower(song.Artist + " " + song.Title + " " + song.Album + " " + song.Path)
+			if strings.Contains(searchText, query) {
+				filtered = append(filtered, song)
+			}
+		}
+		m.filteredSongs = filtered
+	}
+
+	m.rebuildDisplayItems()
+
+	if m.cursor >= len(m.displayItems) {
+		m.cursor = max(0, len(m.displayItems)-1)
+	}
+}
+
+func (m *LibraryModel) groupSongs() []GroupItem {
+	if m.groupingMode == NoGrouping {
+		return nil
+	}
+
+	groupMap := make(map[string][]lib.Song)
+
+	for _, song := range m.filteredSongs {
+		var groupKey string
+		switch m.groupingMode {
+		case GroupByAlbum:
+			groupKey = song.Album
+			if groupKey == "" {
+				groupKey = "Unknown Album"
+			}
+		case GroupByArtist:
+			groupKey = song.Artist
+			if groupKey == "" {
+				groupKey = "Unknown Artist"
+			}
+		}
+		groupMap[groupKey] = append(groupMap[groupKey], song)
+	}
+
+	var groups []GroupItem
+	for name, songs := range groupMap {
+
+		sort.Slice(songs, func(i, j int) bool {
+			if m.groupingMode == GroupByArtist {
+
+				if songs[i].Album != songs[j].Album {
+					return songs[i].Album < songs[j].Album
+				}
+			}
+			return songs[i].Title < songs[j].Title
+		})
+
+		groups = append(groups, GroupItem{
+			Name:      name,
+			Songs:     songs,
+			Expanded:  m.expandedGroups[name],
+			SongCount: len(songs),
+		})
+	}
+
+	sort.Slice(groups, func(i, j int) bool {
+		return groups[i].Name < groups[j].Name
+	})
+
+	return groups
+}
+
+func (m *LibraryModel) rebuildDisplayItems() {
+	m.displayItems = nil
+
+	if m.groupingMode == NoGrouping {
+
+		for i, song := range m.filteredSongs {
+			m.displayItems = append(m.displayItems, ListItem{
+				IsGroup:   false,
+				Song:      &song,
+				SongIndex: i,
+			})
+		}
+	} else {
+
+		m.groups = m.groupSongs()
+		for groupIndex, group := range m.groups {
+
+			m.displayItems = append(m.displayItems, ListItem{
+				IsGroup:    true,
+				Group:      &group,
+				GroupIndex: groupIndex,
+			})
+
+			if group.Expanded {
+				for songIndex, song := range group.Songs {
+					songCopy := song
+					m.displayItems = append(m.displayItems, ListItem{
+						IsGroup:    false,
+						Song:       &songCopy,
+						GroupIndex: groupIndex,
+						SongIndex:  songIndex,
+					})
+				}
+			}
+		}
+	}
+}
+
+func (m *LibraryModel) toggleGrouping() {
+	switch m.groupingMode {
+	case NoGrouping:
+		m.groupingMode = GroupByAlbum
+	case GroupByAlbum:
+		m.groupingMode = GroupByArtist
+	case GroupByArtist:
+		m.groupingMode = NoGrouping
+	}
+	m.rebuildDisplayItems()
+	m.cursor = 0
+}
+
+func (m *LibraryModel) toggleGroupExpansion() {
+	if len(m.displayItems) == 0 || m.cursor >= len(m.displayItems) {
 		return
 	}
 
-	query := strings.ToLower(m.searchQuery)
-	var filtered []lib.Song
+	item := m.displayItems[m.cursor]
+	if !item.IsGroup {
+		return
+	}
 
-	for _, song := range m.songs {
+	groupName := item.Group.Name
+	m.expandedGroups[groupName] = !m.expandedGroups[groupName]
+	m.rebuildDisplayItems()
+}
 
-		searchText := strings.ToLower(song.Artist + " " + song.Title + " " + song.Path)
-		if strings.Contains(searchText, query) {
-			filtered = append(filtered, song)
+func (m *LibraryModel) jumpToCurrentSong() {
+	if m.currentSong == nil {
+		return
+	}
+
+	songInFilteredList := false
+	for _, song := range m.filteredSongs {
+		if song.Path == m.currentSong.Path {
+			songInFilteredList = true
+			break
 		}
 	}
 
-	m.filteredSongs = filtered
+	if !songInFilteredList && m.searchQuery != "" {
+		m.searchQuery = ""
+		m.filteredSongs = m.songs
+		m.rebuildDisplayItems()
+	}
 
-	if m.cursor >= len(m.filteredSongs) {
-		m.cursor = max(0, len(m.filteredSongs)-1)
+	if m.groupingMode != NoGrouping {
+
+		for _, group := range m.groups {
+			for _, song := range group.Songs {
+				if song.Path == m.currentSong.Path {
+
+					if !m.expandedGroups[group.Name] {
+						m.expandedGroups[group.Name] = true
+						m.rebuildDisplayItems()
+					}
+					break
+				}
+			}
+		}
+	}
+
+	for i, item := range m.displayItems {
+		if !item.IsGroup && item.Song != nil && item.Song.Path == m.currentSong.Path {
+			m.cursor = i
+			return
+		}
 	}
 }
 
 func (m *LibraryModel) Init() tea.Cmd {
-	return nil
+	return tea.Tick(time.Millisecond*200, func(t time.Time) tea.Msg {
+		return TickMsg{Time: t}
+	})
 }
 
 func (m *LibraryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -132,104 +344,123 @@ func (m *LibraryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case SongSelectedMsg:
-
 		m.currentSong = &msg.Song
 		return m, nil
 
 	case PlaybackStatusMsg:
-
 		m.isPlaying = msg.IsPlaying
 		return m, nil
 
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "/":
-			if !m.searchMode {
-				m.searchMode = true
-				m.searchQuery = ""
-				return m, nil
-			}
+	case PlaybackPositionMsg:
+		m.position = msg.Position
+		m.totalDuration = msg.TotalDuration
+		return m, nil
 
-		case "esc":
-			if m.searchMode {
+	case TickMsg:
+
+		return m, tea.Tick(time.Millisecond*200, func(t time.Time) tea.Msg {
+			return TickMsg{Time: t}
+		})
+
+	case tea.KeyMsg:
+
+		if m.searchMode {
+			switch msg.String() {
+			case "esc":
 				m.searchMode = false
 				m.searchQuery = ""
 				m.filteredSongs = m.songs
+				m.rebuildDisplayItems()
 				m.cursor = 0
 				return m, nil
-			}
-
-		case "enter":
-			if m.searchMode {
+			case "enter":
 				m.searchMode = false
 				return m, nil
+			case "backspace":
+				if len(m.searchQuery) > 0 {
+					m.searchQuery = m.searchQuery[:len(m.searchQuery)-1]
+					m.filterSongs()
+				}
+				return m, nil
+			default:
+
+				if len(msg.String()) == 1 {
+					m.searchQuery += msg.String()
+					m.filterSongs()
+				}
+				return m, nil
 			}
-			if len(m.filteredSongs) > 0 && m.cursor < len(m.filteredSongs) {
-				return m, func() tea.Msg {
-					return SongSelectedMsg{Song: m.filteredSongs[m.cursor]}
+		}
+
+		switch msg.String() {
+		case "/":
+			m.searchMode = true
+			m.searchQuery = ""
+			return m, nil
+
+		case "enter":
+			if len(m.displayItems) > 0 && m.cursor < len(m.displayItems) {
+				item := m.displayItems[m.cursor]
+				if item.IsGroup {
+
+					m.toggleGroupExpansion()
+					return m, nil
+				} else {
+
+					return m, func() tea.Msg {
+						return SongSelectedMsg{Song: *item.Song}
+					}
 				}
 			}
 
-		case "backspace":
-			if m.searchMode && len(m.searchQuery) > 0 {
-				m.searchQuery = m.searchQuery[:len(m.searchQuery)-1]
-				m.filterSongs()
-				return m, nil
-			}
-
 		case "tab":
-			if m.searchMode {
-				return m, nil
-			}
 			if m.currentSong != nil {
 				return m, func() tea.Msg {
 					return SwitchViewMsg{View: PlayerView}
 				}
 			}
 
+		case "g":
+
+			m.toggleGrouping()
+			return m, nil
+
+		case "c":
+
+			m.jumpToCurrentSong()
+			return m, nil
+
+		case "?":
+
+			m.showHelp = !m.showHelp
+			return m, nil
+
 		case "up", "k":
-			if m.searchMode {
-				return m, nil
-			}
 			if m.cursor > 0 {
 				m.cursor--
 			}
 		case "down", "j":
-			if m.searchMode {
-				return m, nil
-			}
-			if m.cursor < len(m.filteredSongs)-1 {
+			if m.cursor < len(m.displayItems)-1 {
 				m.cursor++
 			}
 		case " ":
-			if m.searchMode {
-				m.searchQuery += " "
-				m.filterSongs()
-				return m, nil
-			}
-			if len(m.filteredSongs) > 0 && m.cursor < len(m.filteredSongs) {
-				return m, func() tea.Msg {
-					return SongSelectedMsg{Song: m.filteredSongs[m.cursor]}
+			if len(m.displayItems) > 0 && m.cursor < len(m.displayItems) {
+				item := m.displayItems[m.cursor]
+				if item.IsGroup {
+
+					m.toggleGroupExpansion()
+					return m, nil
+				} else {
+
+					return m, func() tea.Msg {
+						return SongSelectedMsg{Song: *item.Song}
+					}
 				}
 			}
-		case "home", "g":
-			if m.searchMode {
-				return m, nil
-			}
+		case "home":
 			m.cursor = 0
-		case "end", "G":
-			if m.searchMode {
-				return m, nil
-			}
-			m.cursor = len(m.filteredSongs) - 1
-
-		default:
-
-			if m.searchMode && len(msg.String()) == 1 {
-				m.searchQuery += msg.String()
-				m.filterSongs()
-				return m, nil
-			}
+		case "end":
+			m.cursor = len(m.displayItems) - 1
 		}
 	}
 
@@ -244,8 +475,58 @@ func (m *LibraryModel) SetPlaybackStatus(isPlaying bool) {
 	m.isPlaying = isPlaying
 }
 
-func (m *LibraryModel) View() string {
+func (m *LibraryModel) IsInSearchMode() bool {
+	return m.searchMode
+}
 
+func (m *LibraryModel) getGroupingModeText() string {
+	switch m.groupingMode {
+	case NoGrouping:
+		return "No Grouping"
+	case GroupByAlbum:
+		return "Grouped by Album"
+	case GroupByArtist:
+		return "Grouped by Artist"
+	default:
+		return "Unknown"
+	}
+}
+
+func (m *LibraryModel) GetOrderedSongs() []lib.Song {
+	if m.groupingMode == NoGrouping {
+		return m.filteredSongs
+	}
+
+	var orderedSongs []lib.Song
+	for _, group := range m.groups {
+		orderedSongs = append(orderedSongs, group.Songs...)
+	}
+	return orderedSongs
+}
+
+func (m *LibraryModel) FindSongIndex(targetSong lib.Song) int {
+	orderedSongs := m.GetOrderedSongs()
+	for i, song := range orderedSongs {
+		if song.Path == targetSong.Path {
+			return i
+		}
+	}
+	return -1
+}
+
+func formatDuration(d time.Duration) string {
+	if d < 0 {
+		return "0:00"
+	}
+
+	totalSeconds := int(d.Seconds())
+	minutes := totalSeconds / 60
+	seconds := totalSeconds % 60
+
+	return fmt.Sprintf("%d:%02d", minutes, seconds)
+}
+
+func (m *LibraryModel) View() string {
 	var currentStyles LibraryStyles
 	if m.currentSong != nil && m.albumArtRenderer != nil {
 		dominantColor := m.albumArtRenderer.ExtractDominantColor(*m.currentSong)
@@ -273,13 +554,6 @@ func (m *LibraryModel) View() string {
 		content.WriteString(currentStyles.Title.Render(searchLine))
 	} else {
 		titleText := "GMP"
-		if m.currentSong != nil {
-			playIcon := "⏸"
-			if m.isPlaying {
-				playIcon = "▶"
-			}
-			titleText += fmt.Sprintf(" %s %s", playIcon, m.currentSong.Title)
-		}
 		content.WriteString(currentStyles.Title.Render(titleText))
 	}
 	content.WriteString("\n")
@@ -291,7 +565,7 @@ func (m *LibraryModel) View() string {
 	}
 	content.WriteString("\n")
 
-	if len(m.filteredSongs) == 0 {
+	if len(m.displayItems) == 0 {
 		if m.searchQuery != "" {
 			content.WriteString(currentStyles.Normal.Render("No songs match your search"))
 			content.WriteString("\n")
@@ -304,80 +578,133 @@ func (m *LibraryModel) View() string {
 		return content.String()
 	}
 
-	visibleHeight := max(m.height-8, 5)
+	visibleHeight := max(m.height-12, 5)
 	if m.searchMode || m.searchQuery != "" {
-		visibleHeight = max(m.height-9, 5)
+		visibleHeight = max(m.height-11, 5)
 	}
 
 	start := 0
-	end := len(m.filteredSongs)
+	end := len(m.displayItems)
 
-	if len(m.filteredSongs) > visibleHeight {
+	if len(m.displayItems) > visibleHeight {
 		if m.cursor >= visibleHeight/2 {
-			start = min(m.cursor-visibleHeight/2, len(m.filteredSongs)-visibleHeight)
+			start = min(m.cursor-visibleHeight/2, len(m.displayItems)-visibleHeight)
 		}
-		end = min(start+visibleHeight, len(m.filteredSongs))
+		end = min(start+visibleHeight, len(m.displayItems))
 	}
 
 	for i := start; i < end; i++ {
-		song := m.filteredSongs[i]
+		item := m.displayItems[i]
 
-		var songInfo string
-		if song.Artist != "" && song.Title != "" {
-			songInfo = fmt.Sprintf("%s - %s", song.Artist, song.Title)
-		} else if song.Title != "" {
-			songInfo = song.Title
-		} else {
-			parts := strings.Split(song.Path, "/")
-			if len(parts) > 0 {
-				songInfo = parts[len(parts)-1]
+		if item.IsGroup {
+
+			expandIcon := "▶"
+			if item.Group.Expanded {
+				expandIcon = "▼"
+			}
+
+			groupText := fmt.Sprintf("%s %s (%d songs)", expandIcon, item.Group.Name, item.Group.SongCount)
+			maxWidth := max(m.width-6, 20)
+			if len(groupText) > maxWidth {
+				groupText = groupText[:maxWidth-3] + "..."
+			}
+
+			if i == m.cursor {
+				content.WriteString(currentStyles.Selected.Render(fmt.Sprintf("  %s", groupText)))
 			} else {
-				songInfo = song.Path
+				content.WriteString(currentStyles.Group.Render(fmt.Sprintf("  %s", groupText)))
 			}
-		}
-
-		maxWidth := max(m.width-6, 20)
-		if len(songInfo) > maxWidth {
-			songInfo = songInfo[:maxWidth-3] + "..."
-		}
-
-		prefix := "  "
-		isCurrentSong := m.currentSong != nil && song.Path == m.currentSong.Path
-		if isCurrentSong {
-			prefix = "♪ "
-		}
-
-		if i == m.cursor {
-			if !isCurrentSong {
-				prefix = ""
-			}
-			content.WriteString(currentStyles.Selected.Render(fmt.Sprintf("► %s%s", prefix, songInfo)))
 		} else {
-			content.WriteString(currentStyles.Normal.Render(fmt.Sprintf("%s%s", prefix, songInfo)))
+
+			song := item.Song
+			var songInfo string
+			if song.Artist != "" && song.Title != "" {
+				songInfo = fmt.Sprintf("%s - %s", song.Artist, song.Title)
+			} else if song.Title != "" {
+				songInfo = song.Title
+			} else {
+				parts := strings.Split(song.Path, "/")
+				if len(parts) > 0 {
+					songInfo = parts[len(parts)-1]
+				} else {
+					songInfo = song.Path
+				}
+			}
+
+			maxWidth := max(m.width-10, 20)
+			if len(songInfo) > maxWidth {
+				songInfo = songInfo[:maxWidth-3] + "..."
+			}
+
+			prefix := "    "
+			isCurrentSong := m.currentSong != nil && song.Path == m.currentSong.Path
+			if isCurrentSong {
+				prefix = "  ♪ "
+			}
+
+			if i == m.cursor {
+				content.WriteString(currentStyles.Selected.Render(fmt.Sprintf("%s%s", prefix, songInfo)))
+			} else {
+				style := currentStyles.Normal
+				if m.groupingMode != NoGrouping {
+					style = currentStyles.GroupSong
+				}
+				content.WriteString(style.Render(fmt.Sprintf("%s%s", prefix, songInfo)))
+			}
 		}
 		content.WriteString("\n")
 	}
 
 	content.WriteString("\n")
 
-	pageInfo := fmt.Sprintf("Item %d of %d", m.cursor+1, len(m.filteredSongs))
-	if len(m.filteredSongs) > visibleHeight {
-		pageInfo += fmt.Sprintf(" (showing %d-%d)", start+1, end)
-	}
+	var bottomLine string
 
-	var helpText string
-	if m.searchMode {
-		helpText = "Type to search • Enter confirm • Esc cancel"
+	if (m.showHelp && !m.searchMode) || m.searchMode {
+		var helpText string
+		if m.searchMode {
+			helpText = "Type to search • Enter confirm • Esc cancel"
+		} else {
+			helpText = "↑/↓ navigate • Enter/Space select • g group • c current • / search • Tab player • ? help • q quit"
+		}
+		bottomLine = currentStyles.Help.Render(helpText)
 	} else {
-		helpText = "↑/↓ navigate • Enter select • / search • Tab player • q quit"
+
+		var leftContent string
+		if m.currentSong != nil {
+			songText := fmt.Sprintf("♪ %s", m.currentSong.Title)
+			if m.currentSong.Artist != "" {
+				songText = fmt.Sprintf("♪ %s - %s", m.currentSong.Artist, m.currentSong.Title)
+			}
+
+			if m.totalDuration > 0 {
+				positionText := fmt.Sprintf("%s / %s", formatDuration(m.position), formatDuration(m.totalDuration))
+				songText += fmt.Sprintf(" [%s]", positionText)
+			}
+
+			leftContent = currentStyles.Help.Render(songText)
+		} else {
+			leftContent = currentStyles.Help.Render("No song playing")
+		}
+
+		pageInfo := fmt.Sprintf("Item %d of %d", m.cursor+1, len(m.displayItems))
+
+		groupingText := m.getGroupingModeText()
+		pageInfo += fmt.Sprintf(" • %s", groupingText)
+
+		rightContent := currentStyles.Help.Render(pageInfo)
+
+		leftWidth := lipgloss.Width(leftContent)
+		rightWidth := lipgloss.Width(rightContent)
+		spacingWidth := max(2, m.width-leftWidth-rightWidth-4)
+
+		bottomLine = lipgloss.JoinHorizontal(lipgloss.Left,
+			leftContent,
+			strings.Repeat(" ", spacingWidth),
+			rightContent,
+		)
 	}
 
-	combinedLine := lipgloss.JoinHorizontal(lipgloss.Left,
-		currentStyles.Help.Render(pageInfo),
-		strings.Repeat(" ", max(4, m.width-len(pageInfo)-len(helpText)-8)),
-		currentStyles.Help.Render(helpText),
-	)
-	content.WriteString(combinedLine)
+	content.WriteString(bottomLine)
 
 	return content.String()
 }

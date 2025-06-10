@@ -143,10 +143,7 @@ func (p *Player) Load(filePath string) error {
 	if !p.isInitialized {
 
 		speakerSampleRate := beep.SampleRate(44100)
-		bufferSize := speakerSampleRate.N(time.Second / 20)
-		if bufferSize < 1024 {
-			bufferSize = 1024
-		}
+		bufferSize := max(speakerSampleRate.N(time.Second/20), 1024)
 
 		err = speaker.Init(speakerSampleRate, bufferSize)
 		if err != nil {
@@ -422,11 +419,7 @@ func (p *Player) getCurrentPositionUnsafe() time.Duration {
 	}
 
 	elapsed := time.Since(p.startTime)
-	currentPos := p.pausedPosition + elapsed
-
-	if currentPos > p.totalLength {
-		currentPos = p.totalLength
-	}
+	currentPos := min(p.pausedPosition+elapsed, p.totalLength)
 
 	return currentPos
 }
