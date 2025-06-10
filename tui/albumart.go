@@ -30,7 +30,6 @@ type AlbumArtRenderer struct {
 }
 
 func CalculateOptimalSize(terminalWidth, terminalHeight int) (width, height int) {
-
 	availableWidth := terminalWidth - 10
 	availableHeight := terminalHeight - 15
 
@@ -43,26 +42,77 @@ func CalculateOptimalSize(terminalWidth, terminalHeight int) (width, height int)
 
 	var artSize int
 
-	if terminalWidth >= 140 && terminalHeight >= 40 {
+	if terminalWidth >= 200 && terminalHeight >= 60 {
+
+		artSize = min(availableWidth/2, availableHeight)
+		artSize = max(artSize, 50)
+		artSize = min(artSize, 80)
+	} else if terminalWidth >= 160 && terminalHeight >= 50 {
+
+		artSize = min(availableWidth/2, (availableHeight*3)/4)
+		artSize = max(artSize, 40)
+		artSize = min(artSize, 65)
+	} else if terminalWidth >= 140 && terminalHeight >= 40 {
+
+		artSize = min(availableWidth/2, availableHeight/2)
+		artSize = max(artSize, 35)
+		artSize = min(artSize, 50)
+	} else if terminalWidth >= 100 && terminalHeight >= 30 {
 
 		artSize = min(availableWidth/3, availableHeight/2)
 		artSize = max(artSize, 25)
-		artSize = min(artSize, 40)
-	} else if terminalWidth >= 100 && terminalHeight >= 30 {
-
-		artSize = min(availableWidth/4, availableHeight/2)
-		artSize = max(artSize, 20)
-		artSize = min(artSize, 30)
+		artSize = min(artSize, 35)
 	} else if terminalWidth >= 80 && terminalHeight >= 25 {
 
-		artSize = min(availableWidth/5, availableHeight/3)
-		artSize = max(artSize, 15)
-		artSize = min(artSize, 22)
+		artSize = min(availableWidth/4, availableHeight/3)
+		artSize = max(artSize, 18)
+		artSize = min(artSize, 25)
 	} else {
 
 		artSize = min(availableWidth/6, availableHeight/4)
 		artSize = max(artSize, 8)
 		artSize = min(artSize, 18)
+	}
+
+	return artSize, artSize
+}
+
+func CalculateHighResSize(terminalWidth, terminalHeight int) (width, height int) {
+	availableWidth := terminalWidth - 10
+	availableHeight := terminalHeight - 15
+
+	if availableWidth < 20 {
+		availableWidth = 20
+	}
+	if availableHeight < 10 {
+		availableHeight = 10
+	}
+
+	var artSize int
+
+	if terminalWidth >= 250 && terminalHeight >= 70 {
+
+		artSize = min((availableWidth*2)/3, availableHeight)
+		artSize = max(artSize, 80)
+		artSize = min(artSize, 120)
+	} else if terminalWidth >= 200 && terminalHeight >= 60 {
+
+		artSize = min((availableWidth*3)/5, (availableHeight*4)/5)
+		artSize = max(artSize, 60)
+		artSize = min(artSize, 100)
+	} else if terminalWidth >= 160 && terminalHeight >= 50 {
+
+		artSize = min(availableWidth/2, (availableHeight*3)/4)
+		artSize = max(artSize, 50)
+		artSize = min(artSize, 80)
+	} else if terminalWidth >= 140 && terminalHeight >= 40 {
+
+		artSize = min(availableWidth/2, availableHeight/2)
+		artSize = max(artSize, 40)
+		artSize = min(artSize, 60)
+	} else {
+
+		return CalculateOptimalSize(terminalWidth, terminalHeight)
 	}
 
 	return artSize, artSize
@@ -80,6 +130,11 @@ func NewResponsiveAlbumArtRenderer(terminalWidth, terminalHeight int) *AlbumArtR
 	return NewAlbumArtRenderer(width, height)
 }
 
+func NewHighResAlbumArtRenderer(terminalWidth, terminalHeight int) *AlbumArtRenderer {
+	width, height := CalculateHighResSize(terminalWidth, terminalHeight)
+	return NewAlbumArtRenderer(width, height)
+}
+
 func (r *AlbumArtRenderer) UpdateSize(width, height int) {
 	r.width = width
 	r.height = height
@@ -87,6 +142,11 @@ func (r *AlbumArtRenderer) UpdateSize(width, height int) {
 
 func (r *AlbumArtRenderer) UpdateSizeResponsive(terminalWidth, terminalHeight int) {
 	width, height := CalculateOptimalSize(terminalWidth, terminalHeight)
+	r.UpdateSize(width, height)
+}
+
+func (r *AlbumArtRenderer) UpdateSizeHighRes(terminalWidth, terminalHeight int) {
+	width, height := CalculateHighResSize(terminalWidth, terminalHeight)
 	r.UpdateSize(width, height)
 }
 
