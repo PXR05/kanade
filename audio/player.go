@@ -3,6 +3,7 @@ package audio
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -38,12 +39,22 @@ type Player struct {
 
 	playbackDone chan struct{}
 	playbackMu   sync.Mutex
+
+	lastLoadTime time.Time
+	loadThrottle time.Duration
+
+	trackLoadCount int
+	lastDeepClean  time.Time
+
+	lastPositionUpdate time.Time
+	cachedPosition     time.Duration
 }
 
 func NewPlayer() *Player {
 	return &Player{
 		volumeLevel:  0.5,
 		playbackDone: make(chan struct{}, 1),
+		loadThrottle: 50 * time.Millisecond,
 	}
 }
 
@@ -71,7 +82,6 @@ func (p *Player) GetLastError() error {
 }
 
 func (p *Player) Load(filePath string) error {
-
 	p.loadingMu.Lock()
 	defer p.loadingMu.Unlock()
 
@@ -79,16 +89,39 @@ func (p *Player) Load(filePath string) error {
 		return fmt.Errorf("player is closed")
 	}
 
+	timeSinceLastLoad := time.Since(p.lastLoadTime)
+	if timeSinceLastLoad < p.loadThrottle {
+		waitTime := p.loadThrottle - timeSinceLastLoad
+		time.Sleep(waitTime)
+	}
+	p.lastLoadTime = time.Now()
+
 	atomic.StoreInt32(&p.switchingTrack, 1)
 	defer atomic.StoreInt32(&p.switchingTrack, 0)
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	p.trackLoadCount++
+
+	shouldDeepClean := p.trackLoadCount%10 == 0 || time.Since(p.lastDeepClean) > 60*time.Second
+	if shouldDeepClean {
+
+		p.mu.Unlock()
+		p.DeepCleanup()
+		p.mu.Lock()
+	}
+
 	if p.isPlaying {
 		speaker.Clear()
 		p.isPlaying = false
+
+		time.Sleep(10 * time.Millisecond)
 	}
+
+	speaker.Clear()
+	time.Sleep(2 * time.Millisecond)
+	speaker.Clear()
 
 	if p.streamer != nil {
 		if err := p.streamer.Close(); err != nil {
@@ -96,6 +129,20 @@ func (p *Player) Load(filePath string) error {
 		}
 		p.streamer = nil
 	}
+
+	p.playbackMu.Lock()
+	if p.playbackDone != nil {
+		select {
+		case <-p.playbackDone:
+		default:
+		}
+	}
+	p.playbackMu.Unlock()
+
+	p.ctrl = nil
+	p.volume = nil
+
+	runtime.GC()
 
 	if _, err := os.Stat(filePath); err != nil {
 		return fmt.Errorf("file not accessible: %w", err)
@@ -105,9 +152,10 @@ func (p *Player) Load(filePath string) error {
 	if err != nil {
 		return fmt.Errorf("failed to open file: %w", err)
 	}
+	var fileToClose *os.File = file
 	defer func() {
-		if file != nil {
-			file.Close()
+		if fileToClose != nil {
+			fileToClose.Close()
 		}
 	}()
 
@@ -140,10 +188,15 @@ func (p *Player) Load(filePath string) error {
 		return fmt.Errorf("file contains no audio data or is corrupted")
 	}
 
-	if !p.isInitialized {
+	shouldReinitSpeaker := !p.isInitialized
+	if p.isInitialized {
+		speaker.Clear()
+		time.Sleep(15 * time.Millisecond)
+	}
 
+	if shouldReinitSpeaker {
 		speakerSampleRate := beep.SampleRate(44100)
-		bufferSize := max(speakerSampleRate.N(time.Second/20), 1024)
+		bufferSize := max(speakerSampleRate.N(time.Second/40), 256)
 
 		err = speaker.Init(speakerSampleRate, bufferSize)
 		if err != nil {
@@ -162,12 +215,10 @@ func (p *Player) Load(filePath string) error {
 	finalFormat := format
 
 	if format.SampleRate != p.speakerFormat.SampleRate {
-
-		quality := 4
+		quality := 1
 		resampler := beep.Resample(quality, format.SampleRate, p.speakerFormat.SampleRate, streamer)
 
 		finalStreamer = resampler
-
 		finalFormat.SampleRate = p.speakerFormat.SampleRate
 
 		originalLength := format.SampleRate.D(totalSamples)
@@ -176,17 +227,15 @@ func (p *Player) Load(filePath string) error {
 
 	var finalStreamSeekCloser beep.StreamSeekCloser
 	if format.SampleRate != p.speakerFormat.SampleRate {
-
 		finalStreamSeekCloser = &seekWrapper{
 			Streamer:       finalStreamer,
 			original:       streamer,
 			length:         totalSamples,
 			originalFormat: format,
 			targetFormat:   finalFormat,
-			quality:        4,
+			quality:        1,
 		}
 	} else {
-
 		finalStreamSeekCloser = streamer
 	}
 
@@ -206,7 +255,7 @@ func (p *Player) Load(filePath string) error {
 		p.reportError(fmt.Errorf("failed to set volume: %w", err))
 	}
 
-	file = nil
+	fileToClose = nil
 
 	return nil
 }
@@ -219,9 +268,12 @@ type seekWrapper struct {
 	originalFormat beep.Format
 	targetFormat   beep.Format
 	quality        int
+	mu             sync.Mutex
 }
 
 func (s *seekWrapper) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.original.Close()
 }
 
@@ -230,10 +282,15 @@ func (s *seekWrapper) Len() int {
 }
 
 func (s *seekWrapper) Position() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.position
 }
 
 func (s *seekWrapper) Seek(p int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if p < 0 || p > s.length {
 		return fmt.Errorf("seek position out of bounds: %d (max: %d)", p, s.length)
 	}
@@ -253,6 +310,9 @@ func (s *seekWrapper) Seek(p int) error {
 }
 
 func (s *seekWrapper) Stream(samples [][2]float64) (n int, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	n, ok = s.Streamer.Stream(samples)
 	s.position += n
 	return n, ok
@@ -275,11 +335,11 @@ func (p *Player) Play() error {
 	}
 
 	speaker.Clear()
+	time.Sleep(2 * time.Millisecond)
 
 	if p.pausedPosition > 0 {
 		samplePos := p.format.SampleRate.N(p.pausedPosition)
 		if err := p.streamer.Seek(samplePos); err != nil {
-
 			p.pausedPosition = 0
 			if err := p.streamer.Seek(0); err != nil {
 				return fmt.Errorf("failed to reset to beginning: %w", err)
@@ -295,8 +355,14 @@ func (p *Player) Play() error {
 		return fmt.Errorf("failed to set volume: %w", err)
 	}
 
-	completion := beep.Seq(p.volume, beep.Callback(func() {
+	p.playbackMu.Lock()
+	select {
+	case <-p.playbackDone:
+	default:
+	}
+	p.playbackMu.Unlock()
 
+	completion := beep.Seq(p.volume, beep.Callback(func() {
 		select {
 		case p.playbackDone <- struct{}{}:
 		default:
@@ -325,6 +391,7 @@ func (p *Player) Pause() error {
 
 	p.pausedPosition = p.getCurrentPositionUnsafe()
 	speaker.Clear()
+	time.Sleep(1 * time.Millisecond)
 	p.isPlaying = false
 
 	return nil
@@ -343,12 +410,19 @@ func (p *Player) Stop() error {
 	}
 
 	speaker.Clear()
+	time.Sleep(1 * time.Millisecond)
 	p.isPlaying = false
 	p.pausedPosition = 0
 	p.sampleOffset = 0
 
-	if err := p.streamer.Seek(0); err != nil {
+	p.playbackMu.Lock()
+	select {
+	case <-p.playbackDone:
+	default:
+	}
+	p.playbackMu.Unlock()
 
+	if err := p.streamer.Seek(0); err != nil {
 		return nil
 	}
 
@@ -418,8 +492,16 @@ func (p *Player) getCurrentPositionUnsafe() time.Duration {
 		return p.pausedPosition
 	}
 
+	now := time.Now()
+	if now.Sub(p.lastPositionUpdate) < 50*time.Millisecond {
+		return p.cachedPosition
+	}
+
 	elapsed := time.Since(p.startTime)
 	currentPos := min(p.pausedPosition+elapsed, p.totalLength)
+
+	p.lastPositionUpdate = now
+	p.cachedPosition = currentPos
 
 	return currentPos
 }
@@ -478,7 +560,6 @@ func (p *Player) setVolumeUnsafe(volume float64) error {
 }
 
 func (p *Player) Close() error {
-
 	atomic.StoreInt32(&p.isClosed, 1)
 
 	p.mu.Lock()
@@ -486,8 +567,11 @@ func (p *Player) Close() error {
 
 	if p.isPlaying {
 		speaker.Clear()
+		time.Sleep(10 * time.Millisecond)
 		p.isPlaying = false
 	}
+
+	speaker.Clear()
 
 	var err error
 	if p.streamer != nil {
@@ -495,14 +579,49 @@ func (p *Player) Close() error {
 		p.streamer = nil
 	}
 
+	p.ctrl = nil
+	p.volume = nil
+
+	p.currentFile = ""
+	p.totalLength = 0
+	p.pausedPosition = 0
+	p.sampleOffset = 0
+
 	p.playbackMu.Lock()
 	if p.playbackDone != nil {
+		select {
+		case <-p.playbackDone:
+		default:
+		}
 		close(p.playbackDone)
 		p.playbackDone = nil
 	}
 	p.playbackMu.Unlock()
 
 	return err
+}
+
+func (p *Player) ForceGC() {
+	runtime.GC()
+	runtime.GC()
+}
+
+func (p *Player) DeepCleanup() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	for i := 0; i < 2; i++ {
+		speaker.Clear()
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	for i := 0; i < 2; i++ {
+		runtime.GC()
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	p.trackLoadCount = 0
+	p.lastDeepClean = time.Now()
 }
 
 func getFileExtension(filePath string) string {

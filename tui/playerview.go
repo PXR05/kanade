@@ -31,6 +31,10 @@ type PlayerModel struct {
 
 	lastTrackChange  time.Time
 	trackChangeDelay time.Duration
+
+	cachedDominantColor string
+	cachedAlbumArt      string
+	cachedSongPath      string
 }
 
 type PlayerStyles struct {
@@ -53,7 +57,7 @@ func NewPlayerModel(audioPlayer *audio.Player) *PlayerModel {
 		styles:           DefaultPlayerStyles(),
 		lastUpdate:       time.Now(),
 		albumArtRenderer: NewAlbumArtRenderer(20, 20),
-		trackChangeDelay: 100 * time.Millisecond,
+		trackChangeDelay: 250 * time.Millisecond,
 	}
 }
 
@@ -151,7 +155,7 @@ func (m *PlayerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showVolumeBar = false
 		}
 
-		return m, tea.Tick(time.Millisecond*200, func(t time.Time) tea.Msg {
+		return m, tea.Tick(time.Second*1, func(t time.Time) tea.Msg {
 			return TickMsg{Time: t}
 		})
 
@@ -199,6 +203,7 @@ func (m *PlayerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if err != nil {
 				m.errorMsg = err.Error()
 			} else {
+
 				m.updatePlaybackStatus()
 			}
 
@@ -210,12 +215,14 @@ func (m *PlayerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if err != nil {
 				m.errorMsg = err.Error()
 			} else {
+
 				m.updatePlaybackStatus()
 			}
 
 		case "shift+left", "shift+h", "H":
 
-			if time.Since(m.lastTrackChange) < m.trackChangeDelay {
+			timeSinceLastChange := time.Since(m.lastTrackChange)
+			if timeSinceLastChange < m.trackChangeDelay && timeSinceLastChange > 100*time.Millisecond {
 				return m, nil
 			}
 			m.lastTrackChange = time.Now()
@@ -226,7 +233,8 @@ func (m *PlayerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "shift+right", "shift+l", "L":
 
-			if time.Since(m.lastTrackChange) < m.trackChangeDelay {
+			timeSinceLastChange := time.Since(m.lastTrackChange)
+			if timeSinceLastChange < m.trackChangeDelay && timeSinceLastChange > 100*time.Millisecond {
 				return m, nil
 			}
 			m.lastTrackChange = time.Now()
@@ -241,6 +249,7 @@ func (m *PlayerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if err != nil {
 				m.errorMsg = err.Error()
 			} else {
+
 				m.updatePlaybackStatus()
 			}
 
@@ -248,6 +257,20 @@ func (m *PlayerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			if m.albumArtRenderer != nil {
 				m.errorMsg = "Terminal Info:\n" + m.albumArtRenderer.GetTerminalInfo()
+			}
+
+		case "g":
+
+			if m.audioPlayer != nil {
+				m.audioPlayer.ForceGC()
+				m.errorMsg = "Garbage collection forced"
+			}
+
+		case "x":
+
+			if m.audioPlayer != nil {
+				m.audioPlayer.DeepCleanup()
+				m.errorMsg = "Deep cleanup performed"
 			}
 
 		case "up", "=":
@@ -329,8 +352,19 @@ func (m *PlayerModel) View() string {
 		return content.String()
 	}
 
-	rawDominantColor := m.albumArtRenderer.ExtractDominantColor(*m.currentSong)
-	dominantColor := Colors.AdjustColorForContrast(rawDominantColor)
+	var dominantColor string
+	var albumArt string
+
+	if m.currentSong.Path != m.cachedSongPath {
+
+		rawDominantColor := m.albumArtRenderer.ExtractDominantColor(*m.currentSong)
+		m.cachedDominantColor = Colors.AdjustColorForContrast(rawDominantColor)
+		m.cachedAlbumArt = m.albumArtRenderer.RenderAlbumArt(*m.currentSong)
+		m.cachedSongPath = m.currentSong.Path
+	}
+
+	dominantColor = m.cachedDominantColor
+	albumArt = m.cachedAlbumArt
 
 	availableHeight := m.height - 10
 	contentHeight := 20
@@ -340,7 +374,6 @@ func (m *PlayerModel) View() string {
 		content.WriteString("\n")
 	}
 
-	albumArt := m.albumArtRenderer.RenderAlbumArt(*m.currentSong)
 	albumArtLines := strings.SplitSeq(albumArt, "\n")
 	for line := range albumArtLines {
 		if line != "" {

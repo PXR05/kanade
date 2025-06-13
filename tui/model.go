@@ -159,6 +159,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case SwitchViewMsg:
 		m.currentView = msg.View
+
 		return m, nil
 	}
 
@@ -176,15 +177,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		statusMsg := PlaybackStatusMsg{
 			IsPlaying: m.audioPlayer.IsPlaying(),
 		}
+
 		libraryModel, _ := m.libraryModel.Update(statusMsg)
 		m.libraryModel = libraryModel.(*LibraryModel)
 
-		positionMsg := PlaybackPositionMsg{
-			Position:      m.audioPlayer.GetPlaybackPosition(),
-			TotalDuration: m.audioPlayer.GetTotalLength(),
+		if m.currentView == LibraryView {
+			positionMsg := PlaybackPositionMsg{
+				Position:      m.audioPlayer.GetPlaybackPosition(),
+				TotalDuration: m.audioPlayer.GetTotalLength(),
+			}
+			libraryModel, _ = m.libraryModel.Update(positionMsg)
+			m.libraryModel = libraryModel.(*LibraryModel)
 		}
-		libraryModel, _ = m.libraryModel.Update(positionMsg)
-		m.libraryModel = libraryModel.(*LibraryModel)
 
 		if err := m.audioPlayer.GetLastError(); err != nil && err != m.lastError {
 			cmds = append(cmds, func() tea.Msg {
@@ -202,6 +206,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, cmd)
 
 	case PlayerView:
+
 		playerModel, cmd := m.playerModel.Update(msg)
 		m.playerModel = playerModel.(*PlayerModel)
 		cmds = append(cmds, cmd)
@@ -254,6 +259,10 @@ func (m *Model) handleSongSelection(msg SongSelectedMsg) (tea.Model, tea.Cmd) {
 
 func (m *Model) loadAndPlaySong(song lib.Song) error {
 
+	if m.audioPlayer.IsPlaying() {
+		m.audioPlayer.Stop()
+	}
+
 	if song.Path == "" {
 		return fmt.Errorf("invalid song path")
 	}
@@ -265,6 +274,8 @@ func (m *Model) loadAndPlaySong(song lib.Song) error {
 	if err := m.audioPlayer.Play(); err != nil {
 		return fmt.Errorf("failed to play song '%s': %w", song.Title, err)
 	}
+
+	m.audioPlayer.ForceGC()
 
 	return nil
 }
