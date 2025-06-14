@@ -15,6 +15,7 @@ type ViewState int
 const (
 	LibraryView ViewState = iota
 	PlayerView
+	DownloaderView
 )
 
 type Model struct {
@@ -135,6 +136,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.currentView == PlayerView {
 				m.currentView = LibraryView
 				return m, nil
+			}
+		case "1":
+			return m, func() tea.Msg {
+				return SwitchViewMsg{View: LibraryView}
+			}
+		case "2":
+			return m, func() tea.Msg {
+				return SwitchViewMsg{View: PlayerView}
+			}
+		case "3":
+			return m, func() tea.Msg {
+				return SwitchViewMsg{View: DownloaderView}
 			}
 		}
 
@@ -290,6 +303,8 @@ func (m *Model) View() string {
 		return m.libraryModel.View()
 	case PlayerView:
 		return m.playerModel.View()
+	case DownloaderView:
+		return "Downloader View (Work in Progress)\n\nPress '1' for Library, '2' for Player"
 	default:
 		return "Unknown view"
 	}

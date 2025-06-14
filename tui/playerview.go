@@ -253,12 +253,6 @@ func (m *PlayerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.updatePlaybackStatus()
 			}
 
-		case "d":
-
-			if m.albumArtRenderer != nil {
-				m.errorMsg = "Terminal Info:\n" + m.albumArtRenderer.GetTerminalInfo()
-			}
-
 		case "g":
 
 			if m.audioPlayer != nil {
