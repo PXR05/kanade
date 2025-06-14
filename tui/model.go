@@ -304,7 +304,7 @@ func (m *Model) View() string {
 	case PlayerView:
 		return m.playerModel.View()
 	case DownloaderView:
-		return "Downloader View (Work in Progress)\n\nPress '1' for Library, '2' for Player"
+		return "[WIP]"
 	default:
 		return "Unknown view"
 	}
