@@ -68,6 +68,19 @@ type LibraryStyles struct {
 	GroupSong lipgloss.Style
 }
 
+type ColumnLayout int
+
+const (
+	SingleColumn ColumnLayout = iota
+	TwoColumn
+	ThreeColumn
+)
+
+const (
+	MinWidthForTwoColumn   = 80
+	MinWidthForThreeColumn = 120
+)
+
 func NewLibraryModel(songs []lib.Song) *LibraryModel {
 	model := &LibraryModel{
 		songs:            songs,
@@ -329,7 +342,7 @@ func (m *LibraryModel) jumpToCurrentSong() {
 }
 
 func (m *LibraryModel) Init() tea.Cmd {
-	return tea.Tick(time.Millisecond*200, func(t time.Time) tea.Msg {
+	return tea.Tick(TickInterval, func(t time.Time) tea.Msg {
 		return TickMsg{Time: t}
 	})
 }
@@ -358,7 +371,7 @@ func (m *LibraryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case TickMsg:
 
-		return m, tea.Tick(time.Millisecond*200, func(t time.Time) tea.Msg {
+		return m, tea.Tick(TickInterval, func(t time.Time) tea.Msg {
 			return TickMsg{Time: t}
 		})
 
@@ -492,6 +505,104 @@ func (m *LibraryModel) getGroupingModeText() string {
 	}
 }
 
+func (m *LibraryModel) getColumnLayout() ColumnLayout {
+	if m.width >= MinWidthForThreeColumn {
+		return ThreeColumn
+	} else if m.width >= MinWidthForTwoColumn {
+		return TwoColumn
+	}
+	return SingleColumn
+}
+
+func (m *LibraryModel) calculateColumnWidths() (int, int, int) {
+	layout := m.getColumnLayout()
+	availableWidth := max(m.width-12, 60)
+
+	switch layout {
+	case ThreeColumn:
+
+		titleWidth := max(int(float64(availableWidth)*0.4), 15)
+		artistWidth := max(int(float64(availableWidth)*0.3), 12)
+		albumWidth := max(availableWidth-titleWidth-artistWidth-4, 12)
+		return titleWidth, artistWidth, albumWidth
+	case TwoColumn:
+
+		titleWidth := max(int(float64(availableWidth)*0.6), 20)
+		artistWidth := max(availableWidth-titleWidth-2, 15)
+		return titleWidth, artistWidth, 0
+	default:
+		return 0, 0, 0
+	}
+}
+
+func (m *LibraryModel) formatSongColumns(song *lib.Song, titleWidth, artistWidth, albumWidth int) string {
+	layout := m.getColumnLayout()
+
+	switch layout {
+	case ThreeColumn:
+		title := song.Title
+		if title == "" {
+			title = ExtractFileName(song.Path)
+		}
+
+		artist := song.Artist
+		if artist == "" {
+			artist = "Unknown Artist"
+		}
+
+		album := song.Album
+		if album == "" {
+			album = "Unknown Album"
+		}
+
+		titleCol := PadText(title, titleWidth)
+		artistCol := PadText(artist, artistWidth)
+		albumCol := PadText(album, albumWidth)
+
+		return fmt.Sprintf("%s  %s  %s", titleCol, artistCol, albumCol)
+
+	case TwoColumn:
+		title := song.Title
+		if title == "" {
+			title = ExtractFileName(song.Path)
+		}
+
+		artist := song.Artist
+		if artist == "" {
+			artist = "Unknown Artist"
+		}
+
+		titleCol := PadText(title, titleWidth)
+		artistCol := PadText(artist, artistWidth)
+
+		return fmt.Sprintf("%s  %s", titleCol, artistCol)
+
+	default:
+
+		return FormatSongInfo(song.Artist, song.Title, song.Path)
+	}
+}
+
+func (m *LibraryModel) formatColumnHeaders(titleWidth, artistWidth, albumWidth int) string {
+	layout := m.getColumnLayout()
+
+	switch layout {
+	case ThreeColumn:
+		title := PadText("TITLE", titleWidth)
+		artist := PadText("ARTIST", artistWidth)
+		album := PadText("ALBUM", albumWidth)
+		return fmt.Sprintf("    %s  %s  %s", title, artist, album)
+
+	case TwoColumn:
+		title := PadText("TITLE", titleWidth)
+		artist := PadText("ARTIST", artistWidth)
+		return fmt.Sprintf("    %s  %s", title, artist)
+
+	default:
+		return "    SONG"
+	}
+}
+
 func (m *LibraryModel) GetOrderedSongs() []lib.Song {
 	if m.groupingMode == NoGrouping {
 		return m.filteredSongs
@@ -512,18 +623,6 @@ func (m *LibraryModel) FindSongIndex(targetSong lib.Song) int {
 		}
 	}
 	return -1
-}
-
-func formatDuration(d time.Duration) string {
-	if d < 0 {
-		return "0:00"
-	}
-
-	totalSeconds := int(d.Seconds())
-	minutes := totalSeconds / 60
-	seconds := totalSeconds % 60
-
-	return fmt.Sprintf("%d:%02d", minutes, seconds)
 }
 
 func (m *LibraryModel) View() string {
@@ -587,10 +686,14 @@ func (m *LibraryModel) View() string {
 	end := len(m.displayItems)
 
 	if len(m.displayItems) > visibleHeight {
-		if m.cursor >= visibleHeight/2 {
-			start = min(m.cursor-visibleHeight/2, len(m.displayItems)-visibleHeight)
-		}
-		end = min(start+visibleHeight, len(m.displayItems))
+		start, end = CalculateVisibleRange(len(m.displayItems), visibleHeight, m.cursor)
+	}
+
+	if m.groupingMode == NoGrouping && m.getColumnLayout() != SingleColumn {
+		titleWidth, artistWidth, albumWidth := m.calculateColumnWidths()
+		headers := m.formatColumnHeaders(titleWidth, artistWidth, albumWidth)
+		content.WriteString(currentStyles.Header.Render(headers))
+		content.WriteString("\n")
 	}
 
 	for i := start; i < end; i++ {
@@ -617,39 +720,59 @@ func (m *LibraryModel) View() string {
 		} else {
 
 			song := item.Song
-			var songInfo string
-			if song.Artist != "" && song.Title != "" {
-				songInfo = fmt.Sprintf("%s - %s", song.Artist, song.Title)
-			} else if song.Title != "" {
-				songInfo = song.Title
-			} else {
-				parts := strings.Split(song.Path, "/")
-				if len(parts) > 0 {
-					songInfo = parts[len(parts)-1]
+
+			var songDisplay string
+			var prefix string
+
+			isCurrentSong := m.currentSong != nil && song.Path == m.currentSong.Path
+
+			if m.groupingMode == NoGrouping {
+
+				layout := m.getColumnLayout()
+
+				if layout == SingleColumn {
+
+					songInfo := FormatSongInfo(song.Artist, song.Title, song.Path)
+					maxWidth := SafeMax(m.width-10, ContentMinWidth, ContentMinWidth)
+					songDisplay = TruncateString(songInfo, maxWidth)
+
+					if isCurrentSong {
+						prefix = "  ♪ "
+					} else {
+						prefix = "    "
+					}
 				} else {
-					songInfo = song.Path
+
+					titleWidth, artistWidth, albumWidth := m.calculateColumnWidths()
+					songDisplay = m.formatSongColumns(song, titleWidth, artistWidth, albumWidth)
+
+					if isCurrentSong {
+						prefix = "♪ "
+					} else {
+						prefix = "  "
+					}
+				}
+			} else {
+
+				songInfo := FormatSongInfo(song.Artist, song.Title, song.Path)
+				maxWidth := SafeMax(m.width-10, ContentMinWidth, ContentMinWidth)
+				songDisplay = TruncateString(songInfo, maxWidth)
+
+				if isCurrentSong {
+					prefix = "  ♪ "
+				} else {
+					prefix = "    "
 				}
 			}
 
-			maxWidth := max(m.width-10, 20)
-			if len(songInfo) > maxWidth {
-				songInfo = songInfo[:maxWidth-3] + "..."
-			}
-
-			prefix := "    "
-			isCurrentSong := m.currentSong != nil && song.Path == m.currentSong.Path
-			if isCurrentSong {
-				prefix = "  ♪ "
-			}
-
 			if i == m.cursor {
-				content.WriteString(currentStyles.Selected.Render(fmt.Sprintf("%s%s", prefix, songInfo)))
+				content.WriteString(currentStyles.Selected.Render(fmt.Sprintf("%s%s", prefix, songDisplay)))
 			} else {
 				style := currentStyles.Normal
 				if m.groupingMode != NoGrouping {
 					style = currentStyles.GroupSong
 				}
-				content.WriteString(style.Render(fmt.Sprintf("%s%s", prefix, songInfo)))
+				content.WriteString(style.Render(fmt.Sprintf("%s%s", prefix, songDisplay)))
 			}
 		}
 		content.WriteString("\n")
@@ -677,7 +800,7 @@ func (m *LibraryModel) View() string {
 			}
 
 			if m.totalDuration > 0 {
-				positionText := fmt.Sprintf("%s / %s", formatDuration(m.position), formatDuration(m.totalDuration))
+				positionText := fmt.Sprintf("%s / %s", FormatDuration(m.position), FormatDuration(m.totalDuration))
 				songText += fmt.Sprintf(" [%s]", positionText)
 			}
 
@@ -691,17 +814,23 @@ func (m *LibraryModel) View() string {
 		groupingText := m.getGroupingModeText()
 		pageInfo += fmt.Sprintf(" • %s", groupingText)
 
+		if m.groupingMode == NoGrouping {
+			layout := m.getColumnLayout()
+			var layoutText string
+			switch layout {
+			case ThreeColumn:
+				layoutText = "3 Columns"
+			case TwoColumn:
+				layoutText = "2 Columns"
+			case SingleColumn:
+				layoutText = "1 Column"
+			}
+			pageInfo += fmt.Sprintf(" • %s", layoutText)
+		}
+
 		rightContent := currentStyles.Help.Render(pageInfo)
 
-		leftWidth := lipgloss.Width(leftContent)
-		rightWidth := lipgloss.Width(rightContent)
-		spacingWidth := max(2, m.width-leftWidth-rightWidth-4)
-
-		bottomLine = lipgloss.JoinHorizontal(lipgloss.Left,
-			leftContent,
-			strings.Repeat(" ", spacingWidth),
-			rightContent,
-		)
+		bottomLine = JoinHorizontalWithSpacing(leftContent, rightContent, m.width)
 	}
 
 	content.WriteString(bottomLine)

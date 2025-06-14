@@ -102,7 +102,7 @@ func DefaultPlayerStyles() PlayerStyles {
 }
 
 func (m *PlayerModel) Init() tea.Cmd {
-	return tea.Tick(time.Millisecond*100, func(t time.Time) tea.Msg {
+	return tea.Tick(FastTickInterval, func(t time.Time) tea.Msg {
 		return TickMsg{Time: t}
 	})
 }
@@ -124,7 +124,7 @@ func (m *PlayerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.updatePlaybackStatus()
 
-		return m, tea.Tick(time.Millisecond*200, func(t time.Time) tea.Msg {
+		return m, tea.Tick(TickInterval, func(t time.Time) tea.Msg {
 			return TickMsg{Time: t}
 		})
 

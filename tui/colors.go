@@ -37,12 +37,10 @@ func (c *ColorUtils) gammaCorrect(value float64) float64 {
 func (c *ColorUtils) AdjustColorForContrast(hexColor string) string {
 	luminance := c.calculateLuminance(hexColor)
 
-	if luminance < 0.3 {
-
-		return c.BrightenColor(hexColor, 1.8)
-	} else if luminance > 0.7 {
-
-		return c.DarkenColor(hexColor, 0.6)
+	if luminance < ContrastThresholdLow {
+		return c.BrightenColor(hexColor, BrightenFactor)
+	} else if luminance > ContrastThresholdHigh {
+		return c.DarkenColor(hexColor, DarkenFactor)
 	}
 
 	return hexColor

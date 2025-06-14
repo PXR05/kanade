@@ -33,45 +33,29 @@ func CalculateOptimalSize(terminalWidth, terminalHeight int) (width, height int)
 	availableWidth := terminalWidth - 10
 	availableHeight := terminalHeight - 15
 
-	if availableWidth < 20 {
-		availableWidth = 20
-	}
-	if availableHeight < 10 {
-		availableHeight = 10
-	}
+	availableWidth = SafeMax(availableWidth, ContentMinWidth, ContentMinWidth)
+	availableHeight = SafeMax(availableHeight, ContentMinHeight, ContentMinHeight)
 
 	var artSize int
 
-	if terminalWidth >= 200 && terminalHeight >= 60 {
-
+	if terminalWidth >= TerminalWidthMedium && terminalHeight >= TerminalHeightMedium {
 		artSize = min(availableWidth/2, availableHeight)
-		artSize = max(artSize, 50)
-		artSize = min(artSize, 80)
-	} else if terminalWidth >= 160 && terminalHeight >= 50 {
-
+		artSize = ClampInt(artSize, 50, AlbumArtMaxSizeSmall)
+	} else if terminalWidth >= TerminalWidthSmall && terminalHeight >= TerminalHeightSmall {
 		artSize = min(availableWidth/2, (availableHeight*3)/4)
-		artSize = max(artSize, 40)
-		artSize = min(artSize, 65)
-	} else if terminalWidth >= 140 && terminalHeight >= 40 {
-
+		artSize = ClampInt(artSize, 40, 65)
+	} else if terminalWidth >= 140 && terminalHeight >= TerminalHeightTiny {
 		artSize = min(availableWidth/2, availableHeight/2)
-		artSize = max(artSize, 35)
-		artSize = min(artSize, 50)
-	} else if terminalWidth >= 100 && terminalHeight >= 30 {
-
+		artSize = ClampInt(artSize, 35, 50)
+	} else if terminalWidth >= TerminalWidthTiny && terminalHeight >= 30 {
 		artSize = min(availableWidth/3, availableHeight/2)
-		artSize = max(artSize, 25)
-		artSize = min(artSize, 35)
-	} else if terminalWidth >= 80 && terminalHeight >= 25 {
-
+		artSize = ClampInt(artSize, 25, 35)
+	} else if terminalWidth >= TerminalWidthMinimum && terminalHeight >= TerminalHeightMinimum {
 		artSize = min(availableWidth/4, availableHeight/3)
-		artSize = max(artSize, 18)
-		artSize = min(artSize, 25)
+		artSize = ClampInt(artSize, 18, 25)
 	} else {
-
 		artSize = min(availableWidth/6, availableHeight/4)
-		artSize = max(artSize, 8)
-		artSize = min(artSize, 18)
+		artSize = ClampInt(artSize, AlbumArtMinSize, 18)
 	}
 
 	return artSize, artSize
@@ -81,37 +65,24 @@ func CalculateHighResSize(terminalWidth, terminalHeight int) (width, height int)
 	availableWidth := terminalWidth - 10
 	availableHeight := terminalHeight - 15
 
-	if availableWidth < 20 {
-		availableWidth = 20
-	}
-	if availableHeight < 10 {
-		availableHeight = 10
-	}
+	availableWidth = SafeMax(availableWidth, ContentMinWidth, ContentMinWidth)
+	availableHeight = SafeMax(availableHeight, ContentMinHeight, ContentMinHeight)
 
 	var artSize int
 
-	if terminalWidth >= 250 && terminalHeight >= 70 {
-
+	if terminalWidth >= TerminalWidthLarge && terminalHeight >= TerminalHeightLarge {
 		artSize = min((availableWidth*2)/3, availableHeight)
-		artSize = max(artSize, 80)
-		artSize = min(artSize, 120)
-	} else if terminalWidth >= 200 && terminalHeight >= 60 {
-
+		artSize = ClampInt(artSize, AlbumArtMaxSizeSmall, AlbumArtMaxSizeLarge)
+	} else if terminalWidth >= TerminalWidthMedium && terminalHeight >= TerminalHeightMedium {
 		artSize = min((availableWidth*3)/5, (availableHeight*4)/5)
-		artSize = max(artSize, 60)
-		artSize = min(artSize, 100)
-	} else if terminalWidth >= 160 && terminalHeight >= 50 {
-
+		artSize = ClampInt(artSize, AlbumArtMaxSizeTiny, AlbumArtMaxSizeMedium)
+	} else if terminalWidth >= TerminalWidthSmall && terminalHeight >= TerminalHeightSmall {
 		artSize = min(availableWidth/2, (availableHeight*3)/4)
-		artSize = max(artSize, 50)
-		artSize = min(artSize, 80)
-	} else if terminalWidth >= 140 && terminalHeight >= 40 {
-
+		artSize = ClampInt(artSize, 50, AlbumArtMaxSizeSmall)
+	} else if terminalWidth >= 140 && terminalHeight >= TerminalHeightTiny {
 		artSize = min(availableWidth/2, availableHeight/2)
-		artSize = max(artSize, 40)
-		artSize = min(artSize, 60)
+		artSize = ClampInt(artSize, 40, AlbumArtMaxSizeTiny)
 	} else {
-
 		return CalculateOptimalSize(terminalWidth, terminalHeight)
 	}
 

@@ -140,7 +140,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ErrorMsg:
 		m.lastError = msg.Error
-		m.errorTimeout = time.Now().Add(5 * time.Second)
+		m.errorTimeout = time.Now().Add(ErrorTimeout)
 
 		playerModel, playerCmd := m.playerModel.Update(PlaybackStatusMsg{
 			Error: msg.Error,
