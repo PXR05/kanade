@@ -10,12 +10,14 @@ const (
 	TerminalWidthSmall   = 160
 	TerminalWidthTiny    = 100
 	TerminalWidthMinimum = 80
+	TerminalWidthNarrow  = 140
 
 	TerminalHeightLarge   = 70
 	TerminalHeightMedium  = 60
 	TerminalHeightSmall   = 50
 	TerminalHeightTiny    = 40
 	TerminalHeightMinimum = 25
+	TerminalHeightNarrow  = 30
 
 	// Album art sizing
 	AlbumArtMinSize       = 8
@@ -23,6 +25,17 @@ const (
 	AlbumArtMaxSizeMedium = 100
 	AlbumArtMaxSizeSmall  = 80
 	AlbumArtMaxSizeTiny   = 60
+
+	// Album art size thresholds
+	AlbumArtMediumMin = 50
+	AlbumArtMediumMax = 65
+	AlbumArtSmallMin  = 40
+	AlbumArtSmallMax  = 50
+	AlbumArtTinyMin   = 35
+	AlbumArtTinyMax   = 35
+	AlbumArtMiniMin   = 25
+	AlbumArtMiniMax   = 25
+	AlbumArtMinMax    = 18
 
 	// UI spacing and padding
 	DefaultPadding   = 2
@@ -36,6 +49,10 @@ const (
 	MinVisibleHeight = 5
 	ContentMinWidth  = 20
 	ContentMinHeight = 10
+
+	// Layout thresholds
+	MinWidthForTwoColumn   = TerminalWidthMinimum
+	MinWidthForThreeColumn = TerminalWidthTiny + 20
 
 	// Search and navigation
 	DefaultSearchPrompt  = "Search: /"

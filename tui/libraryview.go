@@ -76,11 +76,6 @@ const (
 	ThreeColumn
 )
 
-const (
-	MinWidthForTwoColumn   = 80
-	MinWidthForThreeColumn = 120
-)
-
 func NewLibraryModel(songs []lib.Song) *LibraryModel {
 	model := &LibraryModel{
 		songs:            songs,
@@ -101,25 +96,25 @@ func NewLibraryModel(songs []lib.Song) *LibraryModel {
 func DefaultLibraryStyles() LibraryStyles {
 	return LibraryStyles{
 		Title: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FAFAFA")).
+			Foreground(lipgloss.Color(DefaultTextColor)).
 			Bold(true).
 			Margin(1, 0),
 		Header: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#666666")).
+			Foreground(lipgloss.Color(DefaultMutedText)).
 			Margin(1, 0),
 		Selected: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FAFAFA")).
+			Foreground(lipgloss.Color(DefaultTextColor)).
 			Background(lipgloss.Color("#333333")).
 			Bold(true),
 		Normal: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#AAAAAA")),
 		Help: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#666666")).
+			Foreground(lipgloss.Color(DefaultMutedText)).
 			Margin(1, 0),
 		Container: lipgloss.NewStyle().
 			Padding(1, 2),
 		Group: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#CCCCCC")).
+			Foreground(lipgloss.Color(DefaultSecondaryText)).
 			Bold(true),
 		GroupSong: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#999999")),
@@ -132,18 +127,18 @@ func (m *LibraryModel) GetColoredStyles(dominantColor string) LibraryStyles {
 
 	return LibraryStyles{
 		Title: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FAFAFA")).
+			Foreground(lipgloss.Color(DefaultTextColor)).
 			Bold(true).
 			Margin(1, 0),
 		Header: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(adjustedColor)).
 			Margin(1, 0),
 		Selected: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FAFAFA")).
+			Foreground(lipgloss.Color(DefaultTextColor)).
 			Background(lipgloss.Color(backgroundAdjustedColor)).
 			Bold(true),
 		Normal: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#CCCCCC")),
+			Foreground(lipgloss.Color(DefaultSecondaryText)),
 		Help: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(adjustedColor)).
 			Margin(1, 0),
@@ -236,7 +231,6 @@ func (m *LibraryModel) rebuildDisplayItems() {
 	m.displayItems = nil
 
 	if m.groupingMode == NoGrouping {
-
 		for i, song := range m.filteredSongs {
 			m.displayItems = append(m.displayItems, ListItem{
 				IsGroup:   false,
@@ -245,7 +239,6 @@ func (m *LibraryModel) rebuildDisplayItems() {
 			})
 		}
 	} else {
-
 		m.groups = m.groupSongs()
 		for groupIndex, group := range m.groups {
 
@@ -318,7 +311,6 @@ func (m *LibraryModel) jumpToCurrentSong() {
 	}
 
 	if m.groupingMode != NoGrouping {
-
 		for _, group := range m.groups {
 			for _, song := range group.Songs {
 				if song.Path == m.currentSong.Path {
@@ -352,7 +344,6 @@ func (m *LibraryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-
 		m.albumArtRenderer = NewResponsiveAlbumArtRenderer(m.width, m.height)
 		return m, nil
 
@@ -370,13 +361,11 @@ func (m *LibraryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case TickMsg:
-
 		return m, tea.Tick(TickInterval, func(t time.Time) tea.Msg {
 			return TickMsg{Time: t}
 		})
 
 	case tea.KeyMsg:
-
 		if m.searchMode {
 			switch msg.String() {
 			case "esc":
@@ -396,7 +385,6 @@ func (m *LibraryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			default:
-
 				if len(msg.String()) == 1 {
 					m.searchQuery += msg.String()
 					m.filterSongs()
@@ -415,11 +403,9 @@ func (m *LibraryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(m.displayItems) > 0 && m.cursor < len(m.displayItems) {
 				item := m.displayItems[m.cursor]
 				if item.IsGroup {
-
 					m.toggleGroupExpansion()
 					return m, nil
 				} else {
-
 					return m, func() tea.Msg {
 						return SongSelectedMsg{Song: *item.Song}
 					}
@@ -434,17 +420,14 @@ func (m *LibraryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "g":
-
 			m.toggleGrouping()
 			return m, nil
 
 		case "c":
-
 			m.jumpToCurrentSong()
 			return m, nil
 
 		case "?":
-
 			m.showHelp = !m.showHelp
 			return m, nil
 
@@ -452,10 +435,12 @@ func (m *LibraryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.cursor > 0 {
 				m.cursor--
 			}
+
 		case "down", "j":
 			if m.cursor < len(m.displayItems)-1 {
 				m.cursor++
 			}
+
 		case " ":
 			if len(m.displayItems) > 0 && m.cursor < len(m.displayItems) {
 				item := m.displayItems[m.cursor]
@@ -470,8 +455,10 @@ func (m *LibraryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 			}
+
 		case "home":
 			m.cursor = 0
+
 		case "end":
 			m.cursor = len(m.displayItems) - 1
 		}
@@ -649,7 +636,7 @@ func (m *LibraryModel) View() string {
 	var content strings.Builder
 
 	if m.searchMode {
-		searchLine := fmt.Sprintf("Search: /%s", m.searchQuery)
+		searchLine := fmt.Sprintf("%s%s", DefaultSearchPrompt, m.searchQuery)
 		content.WriteString(currentStyles.Title.Render(searchLine))
 	} else {
 		titleText := "GMP"

@@ -32,14 +32,12 @@ func main() {
 			os.Exit(1)
 		}
 	} else {
-
 		currentDir, err := os.Getwd()
 		if err != nil {
 			fmt.Printf("Error getting current directory: %v\n", err)
 			os.Exit(1)
 		}
 		dir = currentDir
-		fmt.Printf("No directory specified, using current directory: %s\n", dir)
 	}
 
 	library := &lib.Library{}
@@ -72,7 +70,7 @@ func main() {
 
 	if len(songs) == 0 {
 		fmt.Printf("No songs found in '%s'\n", dir)
-		fmt.Println("Please add some .mp3 or .wav files to the directory")
+		fmt.Println("Please add some .mp3 files to the directory")
 		os.Exit(1)
 	}
 

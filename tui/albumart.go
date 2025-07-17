@@ -40,50 +40,22 @@ func CalculateOptimalSize(terminalWidth, terminalHeight int) (width, height int)
 
 	if terminalWidth >= TerminalWidthMedium && terminalHeight >= TerminalHeightMedium {
 		artSize = min(availableWidth/2, availableHeight)
-		artSize = ClampInt(artSize, 50, AlbumArtMaxSizeSmall)
+		artSize = ClampInt(artSize, AlbumArtMediumMin, AlbumArtMaxSizeSmall)
 	} else if terminalWidth >= TerminalWidthSmall && terminalHeight >= TerminalHeightSmall {
 		artSize = min(availableWidth/2, (availableHeight*3)/4)
-		artSize = ClampInt(artSize, 40, 65)
-	} else if terminalWidth >= 140 && terminalHeight >= TerminalHeightTiny {
+		artSize = ClampInt(artSize, AlbumArtSmallMin, AlbumArtMediumMax)
+	} else if terminalWidth >= TerminalWidthNarrow && terminalHeight >= TerminalHeightTiny {
 		artSize = min(availableWidth/2, availableHeight/2)
-		artSize = ClampInt(artSize, 35, 50)
-	} else if terminalWidth >= TerminalWidthTiny && terminalHeight >= 30 {
+		artSize = ClampInt(artSize, AlbumArtTinyMin, AlbumArtSmallMax)
+	} else if terminalWidth >= TerminalWidthTiny && terminalHeight >= TerminalHeightNarrow {
 		artSize = min(availableWidth/3, availableHeight/2)
-		artSize = ClampInt(artSize, 25, 35)
+		artSize = ClampInt(artSize, AlbumArtMiniMin, AlbumArtTinyMax)
 	} else if terminalWidth >= TerminalWidthMinimum && terminalHeight >= TerminalHeightMinimum {
 		artSize = min(availableWidth/4, availableHeight/3)
-		artSize = ClampInt(artSize, 18, 25)
+		artSize = ClampInt(artSize, AlbumArtMinMax, AlbumArtMiniMax)
 	} else {
 		artSize = min(availableWidth/6, availableHeight/4)
-		artSize = ClampInt(artSize, AlbumArtMinSize, 18)
-	}
-
-	return artSize, artSize
-}
-
-func CalculateHighResSize(terminalWidth, terminalHeight int) (width, height int) {
-	availableWidth := terminalWidth - 10
-	availableHeight := terminalHeight - 15
-
-	availableWidth = SafeMax(availableWidth, ContentMinWidth, ContentMinWidth)
-	availableHeight = SafeMax(availableHeight, ContentMinHeight, ContentMinHeight)
-
-	var artSize int
-
-	if terminalWidth >= TerminalWidthLarge && terminalHeight >= TerminalHeightLarge {
-		artSize = min((availableWidth*2)/3, availableHeight)
-		artSize = ClampInt(artSize, AlbumArtMaxSizeSmall, AlbumArtMaxSizeLarge)
-	} else if terminalWidth >= TerminalWidthMedium && terminalHeight >= TerminalHeightMedium {
-		artSize = min((availableWidth*3)/5, (availableHeight*4)/5)
-		artSize = ClampInt(artSize, AlbumArtMaxSizeTiny, AlbumArtMaxSizeMedium)
-	} else if terminalWidth >= TerminalWidthSmall && terminalHeight >= TerminalHeightSmall {
-		artSize = min(availableWidth/2, (availableHeight*3)/4)
-		artSize = ClampInt(artSize, 50, AlbumArtMaxSizeSmall)
-	} else if terminalWidth >= 140 && terminalHeight >= TerminalHeightTiny {
-		artSize = min(availableWidth/2, availableHeight/2)
-		artSize = ClampInt(artSize, 40, AlbumArtMaxSizeTiny)
-	} else {
-		return CalculateOptimalSize(terminalWidth, terminalHeight)
+		artSize = ClampInt(artSize, AlbumArtMinSize, AlbumArtMinMax)
 	}
 
 	return artSize, artSize
@@ -101,11 +73,6 @@ func NewResponsiveAlbumArtRenderer(terminalWidth, terminalHeight int) *AlbumArtR
 	return NewAlbumArtRenderer(width, height)
 }
 
-func NewHighResAlbumArtRenderer(terminalWidth, terminalHeight int) *AlbumArtRenderer {
-	width, height := CalculateHighResSize(terminalWidth, terminalHeight)
-	return NewAlbumArtRenderer(width, height)
-}
-
 func (r *AlbumArtRenderer) UpdateSize(width, height int) {
 	r.width = width
 	r.height = height
@@ -116,19 +83,14 @@ func (r *AlbumArtRenderer) UpdateSizeResponsive(terminalWidth, terminalHeight in
 	r.UpdateSize(width, height)
 }
 
-func (r *AlbumArtRenderer) UpdateSizeHighRes(terminalWidth, terminalHeight int) {
-	width, height := CalculateHighResSize(terminalWidth, terminalHeight)
-	r.UpdateSize(width, height)
-}
-
 func (r *AlbumArtRenderer) ExtractDominantColor(song lib.Song) string {
 	if song.Picture == nil || song.Picture.Data == nil || len(song.Picture.Data) == 0 {
-		return "#7D56F4"
+		return DefaultAccentColor
 	}
 
 	img, _, err := image.Decode(bytes.NewReader(song.Picture.Data))
 	if err != nil {
-		return "#7D56F4"
+		return DefaultAccentColor
 	}
 
 	dominantColor := getDominantColorAdvanced(img)
@@ -139,14 +101,14 @@ func (r *AlbumArtRenderer) ExtractDominantColor(song lib.Song) string {
 func getDominantColorAdvanced(img image.Image) struct{ R, G, B uint8 } {
 	bounds := img.Bounds()
 
-	colorMap := make(map[uint32]int, 1024)
+	colorMap := make(map[uint32]int, ColorMapSize)
 
 	minX, minY := bounds.Min.X, bounds.Min.Y
 	maxX, maxY := bounds.Max.X, bounds.Max.Y
 
-	stepSize := 3
-	if (maxY-minY)*(maxX-minX) > 400000 {
-		stepSize = 5
+	stepSize := DefaultSampleStep
+	if (maxY-minY)*(maxX-minX) > LargeSampleThreshold {
+		stepSize = HighQualitySampleStep
 	}
 
 	for y := minY; y < maxY; y += stepSize {
@@ -154,13 +116,13 @@ func getDominantColorAdvanced(img image.Image) struct{ R, G, B uint8 } {
 			c := img.At(x, y)
 			r, g, b, a := c.RGBA()
 
-			if a < 32768 || (r+g+b) < 32768 {
+			if a < AlphaThreshold || (r+g+b) < AlphaThreshold {
 				continue
 			}
 
-			r8 := uint8((r >> 8) & 0xF0)
-			g8 := uint8((g >> 8) & 0xF0)
-			b8 := uint8((b >> 8) & 0xF0)
+			r8 := uint8((r >> 8) & ColorQuantizeMask)
+			g8 := uint8((g >> 8) & ColorQuantizeMask)
+			b8 := uint8((b >> 8) & ColorQuantizeMask)
 
 			colorKey := uint32(r8)<<16 | uint32(g8)<<8 | uint32(b8)
 			colorMap[colorKey]++
@@ -177,7 +139,7 @@ func getDominantColorAdvanced(img image.Image) struct{ R, G, B uint8 } {
 		}
 	}
 
-	if maxCount == 0 {
+	if maxCount == MinColorCount {
 		return struct{ R, G, B uint8 }{125, 86, 244}
 	}
 
@@ -187,13 +149,13 @@ func getDominantColorAdvanced(img image.Image) struct{ R, G, B uint8 } {
 
 	brightness := float64(r)*0.299 + float64(g)*0.587 + float64(b)*0.114
 
-	if brightness < 50 {
-		factor := min(50.0/brightness, 3.0)
+	if brightness < MinBrightness {
+		factor := min(MinBrightness/brightness, 3.0)
 		r = uint8(min(float64(r)*factor, 255))
 		g = uint8(min(float64(g)*factor, 255))
 		b = uint8(min(float64(b)*factor, 255))
-	} else if brightness > 200 {
-		factor := 200.0 / brightness
+	} else if brightness > MaxBrightness {
+		factor := MaxBrightness / brightness
 		r = uint8(float64(r) * factor)
 		g = uint8(float64(g) * factor)
 		b = uint8(float64(b) * factor)
@@ -232,9 +194,9 @@ func (r *AlbumArtRenderer) renderError(message string) string {
 		Width(r.width).
 		Height(r.height).
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#FF5555")).
+		BorderForeground(lipgloss.Color(DefaultErrorColor)).
 		Align(lipgloss.Center, lipgloss.Center).
-		Foreground(lipgloss.Color("#FF5555"))
+		Foreground(lipgloss.Color(DefaultErrorColor))
 
 	if len(message) > r.width-4 {
 		message = message[:r.width-7] + "..."
@@ -256,8 +218,8 @@ func (r *AlbumArtRenderer) imageToHighResASCII(img image.Image) string {
 	renderWidth := r.width * 2
 	renderHeight := r.height
 
-	sampleWidth := renderWidth * 5
-	sampleHeight := renderHeight * 5
+	sampleWidth := renderWidth * SuperSamplingFactor
+	sampleHeight := renderHeight * SuperSamplingFactor
 
 	scaleX := float64(squareSize) / float64(sampleWidth)
 	scaleY := float64(squareSize) / float64(sampleHeight)
@@ -291,7 +253,7 @@ func (r *AlbumArtRenderer) imageToHighResASCII(img image.Image) string {
 	numCharsFloat := float64(numChars - 1)
 
 	sampleCoords := make([][2]int, 25)
-	kernelCoords := make([][2]int, 9)
+	kernelCoords := make([][2]int, ProgressBarBlocks)
 
 	for sy := range 5 {
 		for sx := range 5 {
@@ -301,7 +263,7 @@ func (r *AlbumArtRenderer) imageToHighResASCII(img image.Image) string {
 
 	for dy := -1; dy <= 1; dy++ {
 		for dx := -1; dx <= 1; dx++ {
-			kernelCoords[(dy+1)*3+(dx+1)] = [2]int{dx, dy}
+			kernelCoords[(dy+1)*KernelSize+(dx+1)] = [2]int{dx, dy}
 		}
 	}
 
@@ -310,8 +272,8 @@ func (r *AlbumArtRenderer) imageToHighResASCII(img image.Image) string {
 
 			var r, g, b, count uint32
 
-			baseX := x * 5
-			baseY := y * 5
+			baseX := x * SuperSamplingFactor
+			baseY := y * SuperSamplingFactor
 
 			for i := range 25 {
 				sx, sy := sampleCoords[i][0], sampleCoords[i][1]
@@ -324,7 +286,7 @@ func (r *AlbumArtRenderer) imageToHighResASCII(img image.Image) string {
 				if imgX >= cropX && imgX < cropXPlusSquare &&
 					imgY >= cropY && imgY < cropYPlusSquare {
 
-					for j := range 9 {
+					for j := range ProgressBarBlocks {
 						dx, dy := kernelCoords[j][0], kernelCoords[j][1]
 						finalX := imgX + dx
 						finalY := imgY + dy
@@ -386,8 +348,4 @@ func (r *AlbumArtRenderer) imageToHighResASCII(img image.Image) string {
 	}
 
 	return result.String()
-}
-
-func (r *AlbumArtRenderer) GetTerminalInfo() string {
-	return fmt.Sprintf("Using: High-Resolution ASCII Art (%dx%d)", r.width, r.height)
 }

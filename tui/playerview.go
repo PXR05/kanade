@@ -57,46 +57,46 @@ func NewPlayerModel(audioPlayer *audio.Player) *PlayerModel {
 		styles:           DefaultPlayerStyles(),
 		lastUpdate:       time.Now(),
 		albumArtRenderer: NewAlbumArtRenderer(20, 20),
-		trackChangeDelay: 250 * time.Millisecond,
+		trackChangeDelay: TrackChangeDelay,
 	}
 }
 
 func DefaultPlayerStyles() PlayerStyles {
 	return PlayerStyles{
 		Title: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FAFAFA")).
-			Background(lipgloss.Color("#7D56F4")).
+			Foreground(lipgloss.Color(DefaultTextColor)).
+			Background(lipgloss.Color(DefaultAccentColor)).
 			Padding(0, 1).
 			Bold(true),
 		Metadata: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FAFAFA")).
+			Foreground(lipgloss.Color(DefaultTextColor)).
 			Margin(0, 1),
 		MetadataLabel: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#04B575")).
+			Foreground(lipgloss.Color(DefaultSuccessColor)).
 			Bold(true),
 		ProgressBar: lipgloss.NewStyle().
 			Background(lipgloss.Color("#3C3C3C")).
 			Height(1),
 		ProgressFill: lipgloss.NewStyle().
-			Background(lipgloss.Color("#7D56F4")).
+			Background(lipgloss.Color(DefaultAccentColor)).
 			Height(1),
 		Controls: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FAFAFA")).
+			Foreground(lipgloss.Color(DefaultTextColor)).
 			Margin(1, 0).
 			Bold(true),
 		Error: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FF5555")).
+			Foreground(lipgloss.Color(DefaultErrorColor)).
 			Bold(true).
 			Margin(1, 0),
 		Container: lipgloss.NewStyle().
 			Padding(1, 2).
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("#874BFD")),
+			BorderForeground(lipgloss.Color(DefaultBorderColor)),
 		PlayIcon: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#04B575")).
+			Foreground(lipgloss.Color(DefaultSuccessColor)).
 			Bold(true),
 		PauseIcon: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FFB86C")).
+			Foreground(lipgloss.Color(DefaultWarningColor)).
 			Bold(true),
 	}
 }
@@ -142,7 +142,7 @@ func (m *PlayerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.audioPlayer != nil && m.currentSong != nil {
 			m.updatePlaybackStatus()
 
-			if m.wasPlaying && !m.isPlaying && m.position >= m.totalDuration-time.Millisecond*100 {
+			if m.wasPlaying && !m.isPlaying && m.position >= m.totalDuration-PlaybackEndThreshold {
 				m.wasPlaying = false
 				return m, func() tea.Msg {
 					return SongFinishedMsg{}
@@ -151,11 +151,11 @@ func (m *PlayerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.wasPlaying = m.isPlaying
 		}
 
-		if m.showVolumeBar && time.Since(m.lastVolumeChange) > 2*time.Second {
+		if m.showVolumeBar && time.Since(m.lastVolumeChange) > VolumeBarTimeout {
 			m.showVolumeBar = false
 		}
 
-		return m, tea.Tick(time.Second*1, func(t time.Time) tea.Msg {
+		return m, tea.Tick(SlowTickInterval, func(t time.Time) tea.Msg {
 			return TickMsg{Time: t}
 		})
 
@@ -173,7 +173,6 @@ func (m *PlayerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case " ", "p":
-
 			if m.isPlaying {
 				err := m.audioPlayer.Pause()
 				if err != nil {
@@ -188,7 +187,6 @@ func (m *PlayerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updatePlaybackStatus()
 
 		case "s":
-
 			err := m.audioPlayer.Stop()
 			if err != nil {
 				m.errorMsg = err.Error()
@@ -196,9 +194,8 @@ func (m *PlayerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updatePlaybackStatus()
 
 		case "left", "h":
-
 			currentPos := m.audioPlayer.GetPlaybackPosition()
-			newPos := max(currentPos-10*time.Second, 0)
+			newPos := max(currentPos-SeekInterval, 0)
 			err := m.audioPlayer.Seek(newPos)
 			if err != nil {
 				m.errorMsg = err.Error()
@@ -208,9 +205,8 @@ func (m *PlayerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "right", "l":
-
 			currentPos := m.audioPlayer.GetPlaybackPosition()
-			newPos := min(currentPos+10*time.Second, m.totalDuration)
+			newPos := min(currentPos+SeekInterval, m.totalDuration)
 			err := m.audioPlayer.Seek(newPos)
 			if err != nil {
 				m.errorMsg = err.Error()
@@ -220,9 +216,8 @@ func (m *PlayerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "shift+left", "shift+h", "H":
-
 			timeSinceLastChange := time.Since(m.lastTrackChange)
-			if timeSinceLastChange < m.trackChangeDelay && timeSinceLastChange > 100*time.Millisecond {
+			if timeSinceLastChange < m.trackChangeDelay && timeSinceLastChange > FastTickInterval {
 				return m, nil
 			}
 			m.lastTrackChange = time.Now()
@@ -232,9 +227,8 @@ func (m *PlayerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "shift+right", "shift+l", "L":
-
 			timeSinceLastChange := time.Since(m.lastTrackChange)
-			if timeSinceLastChange < m.trackChangeDelay && timeSinceLastChange > 100*time.Millisecond {
+			if timeSinceLastChange < m.trackChangeDelay && timeSinceLastChange > FastTickInterval {
 				return m, nil
 			}
 			m.lastTrackChange = time.Now()
@@ -244,24 +238,20 @@ func (m *PlayerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "0":
-
 			err := m.audioPlayer.Seek(0)
 			if err != nil {
 				m.errorMsg = err.Error()
 			} else {
-
 				m.updatePlaybackStatus()
 			}
 
 		case "g":
-
 			if m.audioPlayer != nil {
 				m.audioPlayer.ForceGC()
 				m.errorMsg = "Garbage collection forced"
 			}
 
 		case "x":
-
 			if m.audioPlayer != nil {
 				m.audioPlayer.DeepCleanup()
 				m.errorMsg = "Deep cleanup performed"
@@ -303,7 +293,6 @@ func (m *PlayerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.errorMsg = ""
 				}
 			} else {
-
 				err := m.audioPlayer.SetVolume(0.7)
 				if err != nil {
 					m.errorMsg = err.Error()
@@ -382,7 +371,7 @@ func (m *PlayerModel) View() string {
 	titleStyle := lipgloss.NewStyle().
 		Width(m.width).
 		Align(lipgloss.Center).
-		Foreground(lipgloss.Color("#FAFAFA")).
+		Foreground(lipgloss.Color(DefaultTextColor)).
 		Bold(true)
 	content.WriteString(titleStyle.Render(m.currentSong.Title))
 	content.WriteString("\n")
@@ -395,7 +384,7 @@ func (m *PlayerModel) View() string {
 	content.WriteString("\n\n")
 
 	if m.totalDuration > 0 {
-		progressWidth := 40
+		progressWidth := ProgressBarWidth
 
 		progress := float64(m.position) / float64(m.totalDuration)
 		if progress > 1.0 {
@@ -412,7 +401,7 @@ func (m *PlayerModel) View() string {
 	}
 
 	if m.showVolumeBar {
-		volumeWidth := 20
+		volumeWidth := VolumeBarWidth
 		volumeProgress := m.volume
 		volumeBar := m.generateStableProgressBar(volumeWidth, volumeProgress, dominantColor)
 
@@ -437,7 +426,7 @@ func (m *PlayerModel) View() string {
 		errorStyle := lipgloss.NewStyle().
 			Width(m.width).
 			Align(lipgloss.Center).
-			Foreground(lipgloss.Color("#FF5555")).
+			Foreground(lipgloss.Color(DefaultErrorColor)).
 			Bold(true)
 		content.WriteString(errorStyle.Render("Error: " + m.errorMsg))
 		content.WriteString("\n")
@@ -452,7 +441,7 @@ func (m *PlayerModel) generateStableProgressBar(width int, progress float64, dom
 
 	exactPos := progress * float64(width)
 	filledColor := dominantColor
-	emptyColor := Colors.DarkenColor(dominantColor, 0.7)
+	emptyColor := Colors.DarkenColor(dominantColor, DarkenFactor)
 
 	filledStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(filledColor))
 	emptyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(emptyColor))
@@ -466,22 +455,13 @@ func (m *PlayerModel) generateStableProgressBar(width int, progress float64, dom
 		var style lipgloss.Style
 
 		if charProgress <= 0 {
-
 			char = "░"
 			style = emptyStyle
 		} else if charProgress >= 1.0 {
-
 			char = "█"
 			style = filledStyle
 		} else {
-
-			blockIndex := int(charProgress*8) + 1
-			if blockIndex > 8 {
-				blockIndex = 8
-			}
-			if blockIndex < 1 {
-				blockIndex = 1
-			}
+			blockIndex := max(min(int(charProgress*ProgressBarStep)+1, ProgressBarStep), 1)
 			char = blocks[blockIndex]
 			style = filledStyle
 		}
