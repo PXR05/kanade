@@ -5,9 +5,11 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"gmp/audio"
+	"gmp/downloader"
 	lib "gmp/library"
 	"gmp/tui"
 
@@ -43,8 +45,19 @@ func main() {
 	library := &lib.Library{}
 	player := audio.NewPlayer()
 
+	downloadDir := filepath.Join(dir, "downloads")
+	err = os.MkdirAll(downloadDir, 0755)
+	if err != nil {
+		fmt.Printf("Error creating download directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	downloaderManager := downloader.NewManager(library, downloadDir, 3)
+	downloaderManager.Start()
+
 	cleanup := func() {
 		log.Println("Shutting down...")
+		downloaderManager.Stop()
 		if err := player.Close(); err != nil {
 			log.Printf("Error closing audio player: %v", err)
 		}
@@ -76,7 +89,7 @@ func main() {
 
 	log.Printf("Found %d songs", len(songs))
 
-	model := tui.NewModel(library, player)
+	model := tui.NewModel(library, player, downloaderManager)
 
 	p := tea.NewProgram(
 		model,

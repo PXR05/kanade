@@ -58,15 +58,9 @@ func (c *ColorUtils) BrightenColor(hexColor string, factor float64) string {
 	g = int(float64(g) + (255-float64(g))*(factor-1.0))
 	b = int(float64(b) + (255-float64(b))*(factor-1.0))
 
-	if r > 255 {
-		r = 255
-	}
-	if g > 255 {
-		g = 255
-	}
-	if b > 255 {
-		b = 255
-	}
+	r = ClampInt(r, 0, 255)
+	g = ClampInt(g, 0, 255)
+	b = ClampInt(b, 0, 255)
 
 	return fmt.Sprintf("#%02X%02X%02X", r, g, b)
 }
@@ -83,15 +77,9 @@ func (c *ColorUtils) DarkenColor(hexColor string, factor float64) string {
 	g = int(float64(g) * factor)
 	b = int(float64(b) * factor)
 
-	if r < 0 {
-		r = 0
-	}
-	if g < 0 {
-		g = 0
-	}
-	if b < 0 {
-		b = 0
-	}
+	r = ClampInt(r, 0, 255)
+	g = ClampInt(g, 0, 255)
+	b = ClampInt(b, 0, 255)
 
 	return fmt.Sprintf("#%02X%02X%02X", r, g, b)
 }

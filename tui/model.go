@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"gmp/audio"
+	"gmp/downloader"
 	lib "gmp/library"
 	"log"
 	"time"
@@ -23,15 +24,19 @@ type Model struct {
 	width       int
 	height      int
 
-	libraryModel *LibraryModel
-	playerModel  *PlayerModel
+	libraryModel    *LibraryModel
+	playerModel     *PlayerModel
+	downloaderModel *DownloaderModel
 
-	library          *lib.Library
-	audioPlayer      *audio.Player
-	songs            []lib.Song
-	currentSongIndex int
+	library           *lib.Library
+	audioPlayer       *audio.Player
+	downloaderManager *downloader.Manager
+	songs             []lib.Song
+	currentSongIndex  int
 
-	selectedSong *lib.Song
+	selectedSong     *lib.Song
+	dominantColor    string
+	albumArtRenderer *AlbumArtRenderer
 
 	lastError    error
 	errorTimeout time.Time
@@ -72,22 +77,45 @@ type (
 	ErrorMsg struct {
 		Error error
 	}
+
+	DownloadProgressMsg struct {
+		Update downloader.ProgressUpdate
+	}
+
+	DownloadCompletedMsg struct {
+		Event downloader.CompletionEvent
+	}
+
+	DownloadAddedMsg struct {
+		ID  string
+		URL string
+	}
+
+	DominantColorMsg struct {
+		Color string
+	}
 )
 
-func NewModel(library *lib.Library, audioPlayer *audio.Player) *Model {
+func NewModel(library *lib.Library, audioPlayer *audio.Player, downloaderManager *downloader.Manager) *Model {
 	songs := library.ListSongs()
 
 	libraryModel := NewLibraryModel(songs)
 	playerModel := NewPlayerModel(audioPlayer)
+	downloaderModel := NewDownloaderModel()
+	downloaderModel.SetDownloaderManager(downloaderManager)
 
 	model := &Model{
-		currentView:      LibraryView,
-		library:          library,
-		audioPlayer:      audioPlayer,
-		songs:            songs,
-		currentSongIndex: -1,
-		libraryModel:     libraryModel,
-		playerModel:      playerModel,
+		currentView:       LibraryView,
+		library:           library,
+		audioPlayer:       audioPlayer,
+		downloaderManager: downloaderManager,
+		songs:             songs,
+		currentSongIndex:  -1,
+		libraryModel:      libraryModel,
+		playerModel:       playerModel,
+		downloaderModel:   downloaderModel,
+		dominantColor:     DefaultAccentColor,
+		albumArtRenderer:  NewAlbumArtRenderer(AlbumArtMinMax, AlbumArtMinMax),
 	}
 
 	audioPlayer.SetErrorCallback(func(err error) {
@@ -101,7 +129,36 @@ func (m *Model) Init() tea.Cmd {
 	return tea.Batch(
 		m.libraryModel.Init(),
 		m.playerModel.Init(),
+		m.downloaderModel.Init(),
+		m.listenForDownloadProgress(),
+		m.listenForDownloadCompletion(),
 	)
+}
+
+func (m *Model) listenForDownloadProgress() tea.Cmd {
+	return tea.Tick(time.Millisecond*100, func(t time.Time) tea.Msg {
+		select {
+		case update := <-m.downloaderManager.GetProgressChannel():
+			return DownloadProgressMsg{Update: update}
+		default:
+			return tea.Tick(time.Millisecond*100, func(t time.Time) tea.Msg {
+				return m.listenForDownloadProgress()()
+			})()
+		}
+	})
+}
+
+func (m *Model) listenForDownloadCompletion() tea.Cmd {
+	return tea.Tick(time.Millisecond*100, func(t time.Time) tea.Msg {
+		select {
+		case event := <-m.downloaderManager.GetCompletionChannel():
+			return DownloadCompletedMsg{Event: event}
+		default:
+			return tea.Tick(time.Millisecond*100, func(t time.Time) tea.Msg {
+				return m.listenForDownloadCompletion()()
+			})()
+		}
+	})
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -111,6 +168,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.albumArtRenderer = NewResponsiveAlbumArtRenderer(m.width, m.height)
 
 		libraryModel, libraryCmd := m.libraryModel.Update(WindowSizeMsg{Width: msg.Width, Height: msg.Height})
 		m.libraryModel = libraryModel.(*LibraryModel)
@@ -118,7 +176,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		playerModel, playerCmd := m.playerModel.Update(WindowSizeMsg{Width: msg.Width, Height: msg.Height})
 		m.playerModel = playerModel.(*PlayerModel)
 
-		cmds = append(cmds, libraryCmd, playerCmd)
+		downloaderModel, downloaderCmd := m.downloaderModel.Update(WindowSizeMsg{Width: msg.Width, Height: msg.Height})
+		m.downloaderModel = downloaderModel.(*DownloaderModel)
+
+		cmds = append(cmds, libraryCmd, playerCmd, downloaderCmd)
 
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -168,12 +229,42 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.playPreviousTrack()
 
 	case SongSelectedMsg:
+		downloaderModel, _ := m.downloaderModel.Update(msg)
+		m.downloaderModel = downloaderModel.(*DownloaderModel)
 		return m.handleSongSelection(msg)
 
 	case SwitchViewMsg:
 		m.currentView = msg.View
 
 		return m, nil
+
+	case DownloadProgressMsg:
+
+		downloaderModel, cmd := m.downloaderModel.Update(msg)
+		m.downloaderModel = downloaderModel.(*DownloaderModel)
+		cmds = append(cmds, cmd)
+
+		cmds = append(cmds, m.listenForDownloadProgress())
+
+	case DownloadCompletedMsg:
+
+		if msg.Event.Error == nil && msg.Event.Song != nil {
+			m.songs = m.library.ListSongs()
+			libraryModel := NewLibraryModel(m.songs)
+			m.libraryModel = libraryModel
+		}
+
+		downloaderModel, cmd := m.downloaderModel.Update(msg)
+		m.downloaderModel = downloaderModel.(*DownloaderModel)
+		cmds = append(cmds, cmd)
+
+		cmds = append(cmds, m.listenForDownloadCompletion())
+
+	case DownloadAddedMsg:
+
+		downloaderModel, cmd := m.downloaderModel.Update(msg)
+		m.downloaderModel = downloaderModel.(*DownloaderModel)
+		cmds = append(cmds, cmd)
 	}
 
 	if tickMsg, ok := msg.(TickMsg); ok {
@@ -228,6 +319,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			libraryModel, _ := m.libraryModel.Update(msg)
 			m.libraryModel = libraryModel.(*LibraryModel)
 		}
+
+	case DownloaderView:
+		downloaderModel, cmd := m.downloaderModel.Update(msg)
+		m.downloaderModel = downloaderModel.(*DownloaderModel)
+		cmds = append(cmds, cmd)
 	}
 
 	return m, tea.Batch(cmds...)
@@ -250,6 +346,15 @@ func (m *Model) handleSongSelection(msg SongSelectedMsg) (tea.Model, tea.Cmd) {
 	}
 
 	m.selectedSong = &msg.Song
+
+	rawDominantColor := m.albumArtRenderer.ExtractDominantColor(msg.Song)
+	m.dominantColor = Colors.AdjustColorForContrast(rawDominantColor)
+
+	colorMsg := DominantColorMsg{Color: m.dominantColor}
+	dModel, _ := m.downloaderModel.Update(colorMsg)
+	m.downloaderModel = dModel.(*DownloaderModel)
+	lModel, _ := m.libraryModel.Update(colorMsg)
+	m.libraryModel = lModel.(*LibraryModel)
 
 	if err := m.loadAndPlaySong(msg.Song); err != nil {
 		playerModel, playerCmd := m.playerModel.Update(PlaybackStatusMsg{
@@ -304,7 +409,7 @@ func (m *Model) View() string {
 	case PlayerView:
 		return m.playerModel.View()
 	case DownloaderView:
-		return "[WIP]"
+		return m.downloaderModel.View()
 	default:
 		return "Unknown view"
 	}

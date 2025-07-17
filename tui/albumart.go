@@ -30,8 +30,8 @@ type AlbumArtRenderer struct {
 }
 
 func CalculateOptimalSize(terminalWidth, terminalHeight int) (width, height int) {
-	availableWidth := terminalWidth - 10
-	availableHeight := terminalHeight - 15
+	availableWidth := terminalWidth - DefaultPadding*5
+	availableHeight := terminalHeight - DefaultPadding*10
 
 	availableWidth = SafeMax(availableWidth, ContentMinWidth, ContentMinWidth)
 	availableHeight = SafeMax(availableHeight, ContentMinHeight, ContentMinHeight)
@@ -151,9 +151,9 @@ func getDominantColorAdvanced(img image.Image) struct{ R, G, B uint8 } {
 
 	if brightness < MinBrightness {
 		factor := min(MinBrightness/brightness, 3.0)
-		r = uint8(min(float64(r)*factor, 255))
-		g = uint8(min(float64(g)*factor, 255))
-		b = uint8(min(float64(b)*factor, 255))
+		r = uint8(ClampFloat64(float64(r)*factor, 0, 255))
+		g = uint8(ClampFloat64(float64(g)*factor, 0, 255))
+		b = uint8(ClampFloat64(float64(b)*factor, 0, 255))
 	} else if brightness > MaxBrightness {
 		factor := MaxBrightness / brightness
 		r = uint8(float64(r) * factor)
@@ -182,9 +182,9 @@ func (r *AlbumArtRenderer) renderPlaceholder() string {
 		Width(r.width).
 		Height(r.height).
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#626262")).
+		BorderForeground(lipgloss.Color(DefaultMutedText)).
 		Align(lipgloss.Center, lipgloss.Center).
-		Foreground(lipgloss.Color("#626262"))
+		Foreground(lipgloss.Color(DefaultMutedText))
 
 	return style.Render("♪\nNo Album Art\n♪")
 }
@@ -198,8 +198,9 @@ func (r *AlbumArtRenderer) renderError(message string) string {
 		Align(lipgloss.Center, lipgloss.Center).
 		Foreground(lipgloss.Color(DefaultErrorColor))
 
-	if len(message) > r.width-4 {
-		message = message[:r.width-7] + "..."
+	maxWidth := r.width - BorderAccountWidth
+	if len(message) > maxWidth {
+		message = TruncateString(message, maxWidth)
 	}
 
 	return style.Render("❌\n" + message)
@@ -244,7 +245,7 @@ func (r *AlbumArtRenderer) imageToHighResASCII(img image.Image) string {
 
 	result := stringBuilderPool.Get().(*strings.Builder)
 	result.Reset()
-	result.Grow(renderHeight * renderWidth * 20)
+	result.Grow(renderHeight * renderWidth * DefaultPadding * 10)
 	defer stringBuilderPool.Put(result)
 
 	cropXPlusSquare := cropX + squareSize
@@ -299,9 +300,9 @@ func (r *AlbumArtRenderer) imageToHighResASCII(img image.Image) string {
 							pr, pg, pb, pa := pixel.RGBA()
 
 							if pa > 0 {
-								r += pr >> 8
-								g += pg >> 8
-								b += pb >> 8
+								r += pr >> ProgressBarStep
+								g += pg >> ProgressBarStep
+								b += pb >> ProgressBarStep
 								count++
 							}
 						}
@@ -324,13 +325,7 @@ func (r *AlbumArtRenderer) imageToHighResASCII(img image.Image) string {
 				brightness = 1.055*math.Pow(brightness, 1.0/2.4) - 0.055
 			}
 
-			charIndex := int(brightness * numCharsFloat)
-			if charIndex >= numChars {
-				charIndex = numChars - 1
-			}
-			if charIndex < 0 {
-				charIndex = 0
-			}
+			charIndex := ClampInt(int(brightness*numCharsFloat), 0, numChars-1)
 
 			hexColor := fmt.Sprintf("#%02X%02X%02X", uint8(r), uint8(g), uint8(b))
 

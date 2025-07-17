@@ -36,20 +36,20 @@ type ListItem struct {
 }
 
 type LibraryModel struct {
-	songs            []lib.Song
-	filteredSongs    []lib.Song
-	cursor           int
-	width            int
-	height           int
-	styles           LibraryStyles
-	currentSong      *lib.Song
-	isPlaying        bool
-	albumArtRenderer *AlbumArtRenderer
-	searchMode       bool
-	searchQuery      string
-	showHelp         bool
-	position         time.Duration
-	totalDuration    time.Duration
+	songs         []lib.Song
+	filteredSongs []lib.Song
+	cursor        int
+	width         int
+	height        int
+	styles        LibraryStyles
+	currentSong   *lib.Song
+	isPlaying     bool
+	dominantColor string
+	searchMode    bool
+	searchQuery   string
+	showHelp      bool
+	position      time.Duration
+	totalDuration time.Duration
 
 	groupingMode   GroupingMode
 	groups         []GroupItem
@@ -78,16 +78,16 @@ const (
 
 func NewLibraryModel(songs []lib.Song) *LibraryModel {
 	model := &LibraryModel{
-		songs:            songs,
-		filteredSongs:    songs,
-		cursor:           0,
-		styles:           DefaultLibraryStyles(),
-		albumArtRenderer: NewAlbumArtRenderer(20, 20),
-		searchMode:       false,
-		searchQuery:      "",
-		showHelp:         false,
-		groupingMode:     NoGrouping,
-		expandedGroups:   make(map[string]bool),
+		songs:          songs,
+		filteredSongs:  songs,
+		cursor:         0,
+		styles:         DefaultLibraryStyles(),
+		dominantColor:  DefaultAccentColor,
+		searchMode:     false,
+		searchQuery:    "",
+		showHelp:       false,
+		groupingMode:   NoGrouping,
+		expandedGroups: make(map[string]bool),
 	}
 	model.rebuildDisplayItems()
 	return model
@@ -98,10 +98,11 @@ func DefaultLibraryStyles() LibraryStyles {
 		Title: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(DefaultTextColor)).
 			Bold(true).
-			Margin(1, 0),
+			Padding(0, DefaultPadding),
 		Header: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(DefaultMutedText)).
-			Margin(1, 0),
+			Bold(true).
+			Padding(0, DefaultPadding),
 		Selected: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(DefaultTextColor)).
 			Background(lipgloss.Color("#333333")).
@@ -110,9 +111,9 @@ func DefaultLibraryStyles() LibraryStyles {
 			Foreground(lipgloss.Color("#AAAAAA")),
 		Help: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(DefaultMutedText)).
-			Margin(1, 0),
+			Padding(0, DefaultPadding),
 		Container: lipgloss.NewStyle().
-			Padding(1, 2),
+			Padding(0, DefaultPadding),
 		Group: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(DefaultSecondaryText)).
 			Bold(true),
@@ -123,16 +124,17 @@ func DefaultLibraryStyles() LibraryStyles {
 
 func (m *LibraryModel) GetColoredStyles(dominantColor string) LibraryStyles {
 	adjustedColor := Colors.AdjustColorForContrast(dominantColor)
-	backgroundAdjustedColor := Colors.DarkenColor(adjustedColor, 0.4)
+	backgroundAdjustedColor := Colors.DarkenColor(adjustedColor, DarkenFactor)
 
 	return LibraryStyles{
 		Title: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(DefaultTextColor)).
 			Bold(true).
-			Margin(1, 0),
+			Padding(0, DefaultPadding),
 		Header: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(adjustedColor)).
-			Margin(1, 0),
+			Bold(true).
+			Padding(0, DefaultPadding),
 		Selected: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(DefaultTextColor)).
 			Background(lipgloss.Color(backgroundAdjustedColor)).
@@ -141,9 +143,9 @@ func (m *LibraryModel) GetColoredStyles(dominantColor string) LibraryStyles {
 			Foreground(lipgloss.Color(DefaultSecondaryText)),
 		Help: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(adjustedColor)).
-			Margin(1, 0),
+			Padding(0, DefaultPadding),
 		Container: lipgloss.NewStyle().
-			Padding(1, 2),
+			Padding(0, DefaultPadding),
 		Group: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(adjustedColor)).
 			Bold(true),
@@ -344,11 +346,14 @@ func (m *LibraryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.albumArtRenderer = NewResponsiveAlbumArtRenderer(m.width, m.height)
 		return m, nil
 
 	case SongSelectedMsg:
 		m.currentSong = &msg.Song
+		return m, nil
+
+	case DominantColorMsg:
+		m.dominantColor = msg.Color
 		return m, nil
 
 	case PlaybackStatusMsg:
@@ -503,19 +508,23 @@ func (m *LibraryModel) getColumnLayout() ColumnLayout {
 
 func (m *LibraryModel) calculateColumnWidths() (int, int, int) {
 	layout := m.getColumnLayout()
-	availableWidth := max(m.width-12, 60)
+	availableWidth := SafeMax(m.width-12, TerminalWidthMinimum-20, TerminalWidthMinimum-20)
+
+	if m.groupingMode != NoGrouping {
+		availableWidth -= 2
+	}
 
 	switch layout {
 	case ThreeColumn:
 
-		titleWidth := max(int(float64(availableWidth)*0.4), 15)
-		artistWidth := max(int(float64(availableWidth)*0.3), 12)
-		albumWidth := max(availableWidth-titleWidth-artistWidth-4, 12)
+		titleWidth := SafeMax(int(float64(availableWidth)*0.4), 15, 15)
+		artistWidth := SafeMax(int(float64(availableWidth)*0.3), 12, 12)
+		albumWidth := SafeMax(availableWidth-titleWidth-artistWidth-4, 12, 12)
 		return titleWidth, artistWidth, albumWidth
 	case TwoColumn:
 
-		titleWidth := max(int(float64(availableWidth)*0.6), 20)
-		artistWidth := max(availableWidth-titleWidth-2, 15)
+		titleWidth := SafeMax(int(float64(availableWidth)*0.6), ContentMinWidth, ContentMinWidth)
+		artistWidth := SafeMax(availableWidth-titleWidth-DefaultPadding, 15, 15)
 		return titleWidth, artistWidth, 0
 	default:
 		return 0, 0, 0
@@ -578,15 +587,15 @@ func (m *LibraryModel) formatColumnHeaders(titleWidth, artistWidth, albumWidth i
 		title := PadText("TITLE", titleWidth)
 		artist := PadText("ARTIST", artistWidth)
 		album := PadText("ALBUM", albumWidth)
-		return fmt.Sprintf("    %s  %s  %s", title, artist, album)
+		return fmt.Sprintf("%s  %s  %s", title, artist, album)
 
 	case TwoColumn:
 		title := PadText("TITLE", titleWidth)
 		artist := PadText("ARTIST", artistWidth)
-		return fmt.Sprintf("    %s  %s", title, artist)
+		return fmt.Sprintf("%s  %s", title, artist)
 
 	default:
-		return "    SONG"
+		return "SONG"
 	}
 }
 
@@ -612,17 +621,188 @@ func (m *LibraryModel) FindSongIndex(targetSong lib.Song) int {
 	return -1
 }
 
+func (m *LibraryModel) getBorderColor() string {
+	if m.currentSong != nil {
+		return Colors.AdjustColorForContrast(m.dominantColor)
+	}
+	return DefaultAccentColor
+}
+
+func (m *LibraryModel) renderLibraryContent(currentStyles LibraryStyles, availableHeight int) string {
+	var libraryContent strings.Builder
+
+	if len(m.displayItems) == 0 {
+		emptyText := ""
+		if m.searchQuery != "" {
+			emptyText = "No songs match your search\nPress Esc to clear search"
+		} else {
+			emptyText = "No songs found"
+		}
+
+		emptyHeight := SafeMax(availableHeight-BorderAccountWidth, KernelSize, KernelSize)
+		topPadding := emptyHeight / DefaultPadding
+		for i := 0; i < topPadding; i++ {
+			libraryContent.WriteString("\n")
+		}
+
+		emptyStyle := lipgloss.NewStyle().
+			Width(m.width - BorderAccountWidth).
+			Align(lipgloss.Center)
+		libraryContent.WriteString(emptyStyle.Render(currentStyles.Normal.Render(emptyText)))
+
+		for i := topPadding + 1; i < emptyHeight; i++ {
+			libraryContent.WriteString("\n")
+		}
+		return libraryContent.String()
+	}
+
+	itemsAvailableHeight := availableHeight - 2
+	headerLines := 0
+
+	if m.groupingMode == NoGrouping && m.getColumnLayout() != SingleColumn {
+		headerLines = 2
+		titleWidth, artistWidth, albumWidth := m.calculateColumnWidths()
+		headers := m.formatColumnHeaders(titleWidth, artistWidth, albumWidth)
+		headerStyle := lipgloss.NewStyle()
+		libraryContent.WriteString(headerStyle.Render(currentStyles.Header.Render(headers)))
+		libraryContent.WriteString("\n")
+
+		separatorWidth := SafeMax(m.width-BorderAccountWidth, ContentMinWidth, ContentMinWidth)
+		separator := strings.Repeat("─", separatorWidth)
+		separatorStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(m.getBorderColor()))
+		libraryContent.WriteString(separatorStyle.Render(separator))
+		libraryContent.WriteString("\n")
+	}
+
+	visibleHeight := SafeMax(itemsAvailableHeight-headerLines, MinVisibleHeight, MinVisibleHeight)
+
+	start := 0
+	end := len(m.displayItems)
+
+	if len(m.displayItems) > visibleHeight {
+		start, end = CalculateVisibleRange(len(m.displayItems), visibleHeight, m.cursor)
+	}
+
+	for i := start; i < end; i++ {
+		item := m.displayItems[i]
+
+		if item.IsGroup {
+			expandIcon := "▶"
+			if item.Group.Expanded {
+				expandIcon = "▼"
+			}
+
+			groupText := fmt.Sprintf("%s %s (%d songs)", expandIcon, item.Group.Name, item.Group.SongCount)
+			maxWidth := SafeMax(m.width-BorderAccountWidth, ContentMinWidth, ContentMinWidth)
+			if m.groupingMode != NoGrouping {
+				maxWidth -= 2
+			}
+			groupText = TruncateString(groupText, maxWidth)
+
+			var itemStyle lipgloss.Style
+			if m.groupingMode != NoGrouping {
+				itemStyle = lipgloss.NewStyle().Padding(0, 1)
+			} else {
+				itemStyle = lipgloss.NewStyle()
+			}
+			if i == m.cursor {
+				libraryContent.WriteString(itemStyle.Render(currentStyles.Selected.Render(groupText)))
+			} else {
+				libraryContent.WriteString(itemStyle.Render(currentStyles.Group.Render(groupText)))
+			}
+		} else {
+			song := item.Song
+
+			var songDisplay string
+			var prefix string
+
+			isCurrentSong := m.currentSong != nil && song.Path == m.currentSong.Path
+
+			if m.groupingMode == NoGrouping {
+				layout := m.getColumnLayout()
+
+				if layout == SingleColumn {
+					songInfo := FormatSongInfo(song.Artist, song.Title, song.Path)
+					maxWidth := SafeMax(m.width-BorderAccountWidth-4, ContentMinWidth, ContentMinWidth)
+					if m.groupingMode != NoGrouping {
+						maxWidth -= 2
+					}
+					songDisplay = TruncateString(songInfo, maxWidth)
+
+					if isCurrentSong {
+						prefix = "♪ "
+					} else {
+						prefix = "  "
+					}
+				} else {
+					titleWidth, artistWidth, albumWidth := m.calculateColumnWidths()
+					songDisplay = m.formatSongColumns(song, titleWidth, artistWidth, albumWidth)
+
+					if isCurrentSong {
+						prefix = "♪ "
+					} else {
+						prefix = "  "
+					}
+				}
+			} else {
+				songInfo := FormatSongInfo(song.Artist, song.Title, song.Path)
+				maxWidth := SafeMax(m.width-BorderAccountWidth-4, ContentMinWidth, ContentMinWidth)
+				if m.groupingMode != NoGrouping {
+					maxWidth -= 2
+				}
+				songDisplay = TruncateString(songInfo, maxWidth)
+
+				if isCurrentSong {
+					prefix = "♪ "
+				} else {
+					prefix = "  "
+				}
+			}
+
+			var itemStyle lipgloss.Style
+			if m.groupingMode != NoGrouping {
+				itemStyle = lipgloss.NewStyle().Padding(0, 1)
+			} else {
+				itemStyle = lipgloss.NewStyle()
+			}
+			if i == m.cursor {
+				libraryContent.WriteString(itemStyle.Render(currentStyles.Selected.Render(fmt.Sprintf("%s%s", prefix, songDisplay))))
+			} else {
+				style := currentStyles.Normal
+				if m.groupingMode != NoGrouping {
+					style = currentStyles.GroupSong
+				}
+				libraryContent.WriteString(itemStyle.Render(style.Render(fmt.Sprintf("%s%s", prefix, songDisplay))))
+			}
+		}
+		libraryContent.WriteString("\n")
+	}
+
+	currentLibraryLines := strings.Count(libraryContent.String(), "\n")
+	neededLines := availableHeight - 2
+	for i := currentLibraryLines; i < neededLines; i++ {
+		libraryContent.WriteString("\n")
+	}
+
+	return libraryContent.String()
+}
+
 func (m *LibraryModel) View() string {
 	var currentStyles LibraryStyles
-	if m.currentSong != nil && m.albumArtRenderer != nil {
-		dominantColor := m.albumArtRenderer.ExtractDominantColor(*m.currentSong)
-		currentStyles = m.GetColoredStyles(dominantColor)
+	if m.currentSong != nil {
+		currentStyles = m.GetColoredStyles(m.dominantColor)
 	} else {
 		currentStyles = m.styles
 	}
 
+	var content strings.Builder
+
+	for range TopPaddingLines {
+		content.WriteString("\n")
+	}
+
 	if len(m.songs) == 0 {
-		var content strings.Builder
 		content.WriteString(currentStyles.Title.Render("GMP"))
 		content.WriteString("\n\n")
 		content.WriteString(currentStyles.Normal.Render("No songs found"))
@@ -632,8 +812,6 @@ func (m *LibraryModel) View() string {
 		content.WriteString(currentStyles.Help.Render("Press 'q' to quit"))
 		return content.String()
 	}
-
-	var content strings.Builder
 
 	if m.searchMode {
 		searchLine := fmt.Sprintf("%s%s", DefaultSearchPrompt, m.searchQuery)
@@ -652,133 +830,58 @@ func (m *LibraryModel) View() string {
 	content.WriteString("\n")
 
 	if len(m.displayItems) == 0 {
+		emptyContent := lipgloss.NewStyle().Padding(0, DefaultPadding)
 		if m.searchQuery != "" {
-			content.WriteString(currentStyles.Normal.Render("No songs match your search"))
+			content.WriteString(emptyContent.Render(currentStyles.Normal.Render("No songs match your search")))
 			content.WriteString("\n")
-			content.WriteString(currentStyles.Help.Render("Press Esc to clear search"))
+			content.WriteString(emptyContent.Render(currentStyles.Help.Render("Press Esc to clear search")))
 		} else {
-			content.WriteString(currentStyles.Normal.Render("No songs found"))
+			content.WriteString(emptyContent.Render(currentStyles.Normal.Render("No songs found")))
 		}
 		content.WriteString("\n\n")
-		content.WriteString(currentStyles.Help.Render("Press 'q' to quit"))
+		content.WriteString(emptyContent.Render(currentStyles.Help.Render("Press 'q' to quit")))
 		return content.String()
 	}
 
-	visibleHeight := max(m.height-12, 5)
-	if m.searchMode || m.searchQuery != "" {
-		visibleHeight = max(m.height-11, 5)
-	}
+	currentHeight := strings.Count(content.String(), "\n") + 1
+	availableHeight := m.height - currentHeight - HelpBottomReserve
 
-	start := 0
-	end := len(m.displayItems)
+	libraryTitle := fmt.Sprintf("Library (%d songs)", len(m.filteredSongs))
+	titleStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(DefaultTextColor)).
+		Bold(true).
+		Padding(0, DefaultPadding)
+	content.WriteString(titleStyle.Render(libraryTitle))
+	content.WriteString("\n")
 
-	if len(m.displayItems) > visibleHeight {
-		start, end = CalculateVisibleRange(len(m.displayItems), visibleHeight, m.cursor)
-	}
+	libraryContent := m.renderLibraryContent(currentStyles, availableHeight-DefaultPadding)
 
-	if m.groupingMode == NoGrouping && m.getColumnLayout() != SingleColumn {
-		titleWidth, artistWidth, albumWidth := m.calculateColumnWidths()
-		headers := m.formatColumnHeaders(titleWidth, artistWidth, albumWidth)
-		content.WriteString(currentStyles.Header.Render(headers))
-		content.WriteString("\n")
-	}
+	borderColor := m.getBorderColor()
 
-	for i := start; i < end; i++ {
-		item := m.displayItems[i]
+	borderedLibrary := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(borderColor)).
+		Width(m.width-BorderAccountWidth).
+		Height(availableHeight-DefaultPadding).
+		Margin(0, DefaultPadding)
 
-		if item.IsGroup {
-
-			expandIcon := "▶"
-			if item.Group.Expanded {
-				expandIcon = "▼"
-			}
-
-			groupText := fmt.Sprintf("%s %s (%d songs)", expandIcon, item.Group.Name, item.Group.SongCount)
-			maxWidth := max(m.width-6, 20)
-			if len(groupText) > maxWidth {
-				groupText = groupText[:maxWidth-3] + "..."
-			}
-
-			if i == m.cursor {
-				content.WriteString(currentStyles.Selected.Render(fmt.Sprintf("  %s", groupText)))
-			} else {
-				content.WriteString(currentStyles.Group.Render(fmt.Sprintf("  %s", groupText)))
-			}
-		} else {
-
-			song := item.Song
-
-			var songDisplay string
-			var prefix string
-
-			isCurrentSong := m.currentSong != nil && song.Path == m.currentSong.Path
-
-			if m.groupingMode == NoGrouping {
-
-				layout := m.getColumnLayout()
-
-				if layout == SingleColumn {
-
-					songInfo := FormatSongInfo(song.Artist, song.Title, song.Path)
-					maxWidth := SafeMax(m.width-10, ContentMinWidth, ContentMinWidth)
-					songDisplay = TruncateString(songInfo, maxWidth)
-
-					if isCurrentSong {
-						prefix = "  ♪ "
-					} else {
-						prefix = "    "
-					}
-				} else {
-
-					titleWidth, artistWidth, albumWidth := m.calculateColumnWidths()
-					songDisplay = m.formatSongColumns(song, titleWidth, artistWidth, albumWidth)
-
-					if isCurrentSong {
-						prefix = "♪ "
-					} else {
-						prefix = "  "
-					}
-				}
-			} else {
-
-				songInfo := FormatSongInfo(song.Artist, song.Title, song.Path)
-				maxWidth := SafeMax(m.width-10, ContentMinWidth, ContentMinWidth)
-				songDisplay = TruncateString(songInfo, maxWidth)
-
-				if isCurrentSong {
-					prefix = "  ♪ "
-				} else {
-					prefix = "    "
-				}
-			}
-
-			if i == m.cursor {
-				content.WriteString(currentStyles.Selected.Render(fmt.Sprintf("%s%s", prefix, songDisplay)))
-			} else {
-				style := currentStyles.Normal
-				if m.groupingMode != NoGrouping {
-					style = currentStyles.GroupSong
-				}
-				content.WriteString(style.Render(fmt.Sprintf("%s%s", prefix, songDisplay)))
-			}
-		}
-		content.WriteString("\n")
-	}
+	content.WriteString(borderedLibrary.Render(libraryContent))
 
 	content.WriteString("\n")
 
 	var bottomLine string
+
+	helpStyle := lipgloss.NewStyle().Padding(0, MinimumPadding)
 
 	if (m.showHelp && !m.searchMode) || m.searchMode {
 		var helpText string
 		if m.searchMode {
 			helpText = "Type to search • Enter confirm • Esc cancel"
 		} else {
-			helpText = "↑/↓ navigate • Enter/Space select • g group • c current • / search • Tab player • ? help • q quit"
+			helpText = BuildHelpText(NavigationKeys, ActionKeys)
 		}
-		bottomLine = currentStyles.Help.Render(helpText)
+		bottomLine = helpStyle.Render(currentStyles.Help.Render(helpText))
 	} else {
-
 		var leftContent string
 		if m.currentSong != nil {
 			songText := fmt.Sprintf("♪ %s", m.currentSong.Title)
@@ -791,9 +894,9 @@ func (m *LibraryModel) View() string {
 				songText += fmt.Sprintf(" [%s]", positionText)
 			}
 
-			leftContent = currentStyles.Help.Render(songText)
+			leftContent = songText
 		} else {
-			leftContent = currentStyles.Help.Render("No song playing")
+			leftContent = "No song playing"
 		}
 
 		pageInfo := fmt.Sprintf("Item %d of %d", m.cursor+1, len(m.displayItems))
@@ -815,9 +918,10 @@ func (m *LibraryModel) View() string {
 			pageInfo += fmt.Sprintf(" • %s", layoutText)
 		}
 
-		rightContent := currentStyles.Help.Render(pageInfo)
+		rightContent := pageInfo
 
-		bottomLine = JoinHorizontalWithSpacing(leftContent, rightContent, m.width)
+		spacedContent := JoinHorizontalWithSpacing(leftContent, rightContent, m.width-BorderAccountWidth)
+		bottomLine = helpStyle.Render(currentStyles.Help.Render(spacedContent))
 	}
 
 	content.WriteString(bottomLine)

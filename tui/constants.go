@@ -79,7 +79,7 @@ const (
 // Color Constants
 const (
 	// Default colors
-	DefaultAccentColor   = "#7D56F4"
+	DefaultAccentColor   = "#FAFAFA"
 	DefaultErrorColor    = "#FF5555"
 	DefaultSuccessColor  = "#04B575"
 	DefaultWarningColor  = "#FFB86C"
@@ -117,6 +117,18 @@ const (
 	// Progress bar rendering
 	ProgressBarBlocks = 9
 	ProgressBarStep   = 8
+)
+
+// Downloader Constants
+const (
+	MinInputWidth         = 40
+	MaxTitleDisplayLength = 40
+	ProgressBarMinWidth   = 15
+	ProgressBarMaxWidth   = 30
+	DefaultVisibleItems   = 10
+	TopPaddingLines       = 1
+	HelpBottomReserve     = 2
+	BorderAccountWidth    = 4
 )
 
 // Key Bindings

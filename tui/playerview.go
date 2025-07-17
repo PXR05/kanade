@@ -56,7 +56,7 @@ func NewPlayerModel(audioPlayer *audio.Player) *PlayerModel {
 		volume:           0.5,
 		styles:           DefaultPlayerStyles(),
 		lastUpdate:       time.Now(),
-		albumArtRenderer: NewAlbumArtRenderer(20, 20),
+		albumArtRenderer: NewAlbumArtRenderer(AlbumArtMinMax, AlbumArtMinMax),
 		trackChangeDelay: TrackChangeDelay,
 	}
 }
@@ -349,9 +349,9 @@ func (m *PlayerModel) View() string {
 	dominantColor = m.cachedDominantColor
 	albumArt = m.cachedAlbumArt
 
-	availableHeight := m.height - 10
-	contentHeight := 20
-	topPadding := max((availableHeight-contentHeight)/2, 2)
+	availableHeight := m.height - DefaultPadding*5
+	contentHeight := DefaultPadding * 10
+	topPadding := SafeMax((availableHeight-contentHeight)/DefaultPadding, DefaultPadding, DefaultPadding)
 
 	for range topPadding {
 		content.WriteString("\n")
@@ -386,10 +386,7 @@ func (m *PlayerModel) View() string {
 	if m.totalDuration > 0 {
 		progressWidth := ProgressBarWidth
 
-		progress := float64(m.position) / float64(m.totalDuration)
-		if progress > 1.0 {
-			progress = 1.0
-		}
+		progress := ClampFloat64(float64(m.position)/float64(m.totalDuration), 0.0, 1.0)
 
 		progressBar := m.generateStableProgressBar(progressWidth, progress, dominantColor)
 
@@ -402,7 +399,7 @@ func (m *PlayerModel) View() string {
 
 	if m.showVolumeBar {
 		volumeWidth := VolumeBarWidth
-		volumeProgress := m.volume
+		volumeProgress := ClampFloat64(m.volume, 0.0, 1.0)
 		volumeBar := m.generateStableProgressBar(volumeWidth, volumeProgress, dominantColor)
 
 		volumeIcon := ""
@@ -412,7 +409,7 @@ func (m *PlayerModel) View() string {
 			volumeIcon = ""
 		}
 
-		volumeText := fmt.Sprintf("%s %s %d%%", volumeIcon, volumeBar, int(m.volume*100))
+		volumeText := fmt.Sprintf("%s %s %d%%", volumeIcon, volumeBar, ClampInt(int(m.volume*100), 0, 100))
 		volumeStyle := lipgloss.NewStyle().
 			Width(m.width).
 			Align(lipgloss.Center).
