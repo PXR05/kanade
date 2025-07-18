@@ -5,7 +5,6 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 
 	"gmp/audio"
@@ -45,14 +44,7 @@ func main() {
 	library := &lib.Library{}
 	player := audio.NewPlayer()
 
-	downloadDir := filepath.Join(dir, "downloads")
-	err = os.MkdirAll(downloadDir, 0755)
-	if err != nil {
-		fmt.Printf("Error creating download directory: %v\n", err)
-		os.Exit(1)
-	}
-
-	downloaderManager := downloader.NewManager(library, downloadDir, 3)
+	downloaderManager := downloader.NewManager(library, dir, 3)
 	downloaderManager.Start()
 
 	cleanup := func() {

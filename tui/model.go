@@ -189,7 +189,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-			if m.currentView == LibraryView && m.libraryModel.IsInSearchMode() {
+			if m.currentView == LibraryView && m.libraryModel.searchMode {
+				break
+			}
+
+			if m.currentView == DownloaderView && m.downloaderModel.inputMode {
 				break
 			}
 			return m, tea.Quit
@@ -198,15 +202,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.currentView = LibraryView
 				return m, nil
 			}
-		case "1":
+		case "alt+1":
 			return m, func() tea.Msg {
 				return SwitchViewMsg{View: LibraryView}
 			}
-		case "2":
+		case "alt+2":
 			return m, func() tea.Msg {
 				return SwitchViewMsg{View: PlayerView}
 			}
-		case "3":
+		case "alt+3":
 			return m, func() tea.Msg {
 				return SwitchViewMsg{View: DownloaderView}
 			}

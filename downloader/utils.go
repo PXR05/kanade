@@ -76,10 +76,6 @@ func extractVideoID(urlStr string) string {
 	return ""
 }
 
-func generateID() string {
-	return fmt.Sprintf("yt_%d", time.Now().UnixNano())
-}
-
 func extractFilename(urlStr string) string {
 	videoID := extractVideoID(urlStr)
 	if videoID == "" {

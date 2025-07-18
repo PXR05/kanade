@@ -155,18 +155,4 @@ var (
 		"q":     "Quit",
 		"esc":   "Cancel/Back",
 	}
-
-	// Player keys
-	PlayerKeys = map[string]string{
-		"p":           "Play/Pause",
-		"s":           "Stop",
-		"left":        "Seek backward",
-		"right":       "Seek forward",
-		"shift+left":  "Previous track",
-		"shift+right": "Next track",
-		"0":           "Restart track",
-		"up":          "Volume up",
-		"down":        "Volume down",
-		"m":           "Mute/Unmute",
-	}
 )

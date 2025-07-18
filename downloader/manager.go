@@ -1,15 +1,13 @@
 package downloader
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +16,7 @@ import (
 	"gmp/metadata"
 
 	"github.com/dhowden/tag"
+	"github.com/kkdai/youtube/v2"
 )
 
 type Status int
@@ -62,6 +61,7 @@ type CompletionEvent struct {
 
 type Manager struct {
 	items        map[string]*Item
+	order        []string
 	queue        chan *Item
 	progressChan chan ProgressUpdate
 	completeChan chan CompletionEvent
@@ -73,6 +73,8 @@ type Manager struct {
 	ctx          context.Context
 	cancel       context.CancelFunc
 	wg           sync.WaitGroup
+	cancelMap    map[string]context.CancelFunc
+	cancelMapMu  sync.RWMutex
 }
 
 func NewManager(library *lib.Library, downloadDir string, workers int) *Manager {
@@ -80,6 +82,7 @@ func NewManager(library *lib.Library, downloadDir string, workers int) *Manager 
 
 	return &Manager{
 		items:        make(map[string]*Item),
+		order:        make([]string, 0),
 		queue:        make(chan *Item, 100),
 		progressChan: make(chan ProgressUpdate, 100),
 		completeChan: make(chan CompletionEvent, 100),
@@ -89,13 +92,14 @@ func NewManager(library *lib.Library, downloadDir string, workers int) *Manager 
 		maxRetries:   3,
 		ctx:          ctx,
 		cancel:       cancel,
+		cancelMap:    make(map[string]context.CancelFunc),
 	}
 }
 
 func (m *Manager) Start() {
 	for i := 0; i < m.workers; i++ {
 		m.wg.Add(1)
-		go m.worker(i)
+		go m.worker()
 	}
 }
 
@@ -114,7 +118,7 @@ func (m *Manager) AddDownload(url string) (string, error) {
 		return "", fmt.Errorf("invalid YouTube URL: %s", url)
 	}
 
-	id := generateID()
+	id := fmt.Sprintf("yt_%d", time.Now().UnixNano())
 	videoID := extractVideoID(url)
 
 	item := &Item{
@@ -129,6 +133,7 @@ func (m *Manager) AddDownload(url string) (string, error) {
 
 	m.mu.Lock()
 	m.items[id] = item
+	m.order = append(m.order, id)
 	m.mu.Unlock()
 
 	select {
@@ -153,6 +158,12 @@ func (m *Manager) RemoveDownload(id string) error {
 	}
 
 	delete(m.items, id)
+	for i, oid := range m.order {
+		if oid == id {
+			m.order = append(m.order[:i], m.order[i+1:]...)
+			break
+		}
+	}
 	return nil
 }
 
@@ -161,7 +172,8 @@ func (m *Manager) GetDownloads() []*Item {
 	defer m.mu.RUnlock()
 
 	items := make([]*Item, 0, len(m.items))
-	for _, item := range m.items {
+	for _, id := range m.order {
+		item := m.items[id]
 		itemCopy := *item
 		items = append(items, &itemCopy)
 	}
@@ -174,6 +186,29 @@ func (m *Manager) GetProgressChannel() <-chan ProgressUpdate {
 
 func (m *Manager) GetCompletionChannel() <-chan CompletionEvent {
 	return m.completeChan
+}
+
+func (m *Manager) CancelDownload(id string) error {
+	m.cancelMapMu.RLock()
+	cancel, exists := m.cancelMap[id]
+	m.cancelMapMu.RUnlock()
+
+	if exists {
+		cancel()
+	}
+
+	m.mu.Lock()
+	item, itemExists := m.items[id]
+	if itemExists && (item.Status == Pending || item.Status == InProgress) {
+		item.Status = Cancelled
+	}
+	m.mu.Unlock()
+
+	if !itemExists {
+		return fmt.Errorf("download not found: %s", id)
+	}
+
+	return nil
 }
 
 func (m *Manager) RetryDownload(id string) error {
@@ -203,7 +238,7 @@ func (m *Manager) RetryDownload(id string) error {
 	}
 }
 
-func (m *Manager) worker(workerID int) {
+func (m *Manager) worker() {
 	defer m.wg.Done()
 
 	for {
@@ -212,16 +247,40 @@ func (m *Manager) worker(workerID int) {
 			if item == nil {
 				return
 			}
-			m.processDownload(item, workerID)
+			m.processDownload(item)
 		case <-m.ctx.Done():
 			return
 		}
 	}
 }
 
-// workerID for later
-func (m *Manager) processDownload(item *Item, workerID int) {
+func (m *Manager) processDownload(item *Item) {
+	downloadCtx, downloadCancel := context.WithCancel(m.ctx)
+	m.cancelMapMu.Lock()
+	m.cancelMap[item.ID] = downloadCancel
+	m.cancelMapMu.Unlock()
+
+	defer func() {
+		m.cancelMapMu.Lock()
+		delete(m.cancelMap, item.ID)
+		m.cancelMapMu.Unlock()
+	}()
+
+	m.mu.RLock()
+	if item.Status == Cancelled {
+		m.mu.RUnlock()
+		return
+	}
+	m.mu.RUnlock()
+
 	m.updateStatus(item.ID, InProgress, "")
+
+	select {
+	case <-downloadCtx.Done():
+		m.updateStatus(item.ID, Cancelled, "")
+		return
+	default:
+	}
 
 	err := os.MkdirAll(m.downloadDir, 0755)
 	if err != nil {
@@ -229,10 +288,16 @@ func (m *Manager) processDownload(item *Item, workerID int) {
 		return
 	}
 
-	filePath, err := m.downloadYouTubeVideo(item)
+	filePath, err := m.downloadVideo(downloadCtx, item)
 	if err != nil {
-		m.completeWithError(item, err)
-		return
+		select {
+		case <-downloadCtx.Done():
+			m.updateStatus(item.ID, Cancelled, "")
+			return
+		default:
+			m.completeWithError(item, err)
+			return
+		}
 	}
 
 	song, err := m.extractMetadataAndCreateSong(filePath)
@@ -258,143 +323,369 @@ func (m *Manager) processDownload(item *Item, workerID int) {
 	}
 }
 
-func (m *Manager) downloadYouTubeVideo(item *Item) (string, error) {
-
-	if _, err := exec.LookPath("yt-dlp"); err != nil {
-		return "", fmt.Errorf("yt-dlp not found. Please install yt-dlp: pip install yt-dlp")
+func (m *Manager) downloadVideo(ctx context.Context, item *Item) (string, error) {
+	select {
+	case <-m.ctx.Done():
+		return "", fmt.Errorf("download cancelled")
+	default:
 	}
 
-	cmd := exec.CommandContext(m.ctx, "yt-dlp",
-		"-f", "bestaudio",
-		"--extract-audio",
-		"--audio-format", "mp3",
-		"--embed-metadata",
-		"--embed-thumbnail",
-		"-o", "\"%(title)s.%(ext)s\"",
-		"--progress",
-		"--newline",
-		"\""+item.URL+"\"",
-	)
-
-	stdout, err := cmd.StdoutPipe()
+	client, err := m.createClient()
 	if err != nil {
-		return "", fmt.Errorf("failed to create stdout pipe: %w", err)
+		return "", fmt.Errorf("failed to create client: %w", err)
 	}
 
-	stderr, err := cmd.StderrPipe()
+	video, err := client.GetVideo(item.URL)
 	if err != nil {
-		return "", fmt.Errorf("failed to create stderr pipe: %w", err)
-	}
-
-	if err := cmd.Start(); err != nil {
-		return "", fmt.Errorf("failed to start yt-dlp: %w", err)
-	}
-
-	go m.monitorYtDlpProgress(item, stdout)
-
-	var errorOutput strings.Builder
-	go func() {
-		scanner := bufio.NewScanner(stderr)
-		for scanner.Scan() {
-			errorOutput.WriteString(scanner.Text() + "\n")
+		fallbackClient := youtube.Client{}
+		fallbackVideo, fallbackErr := fallbackClient.GetVideo(item.URL)
+		if fallbackErr != nil {
+			return "", fmt.Errorf("failed to get video info for URL %s (tried both enhanced and fallback clients): original error: %w, fallback error: %v", item.URL, err, fallbackErr)
 		}
-	}()
-
-	if err := cmd.Wait(); err != nil {
-		errMsg := strings.TrimSpace(errorOutput.String())
-		if errMsg == "" {
-			errMsg = err.Error()
-		}
-		return "", fmt.Errorf("yt-dlp failed: %s", errMsg)
+		client = fallbackClient
+		video = fallbackVideo
 	}
 
-	return m.findDownloadedFile(item)
-}
+	item.Title = sanitizeFilename(video.Title)
 
-func (m *Manager) monitorYtDlpProgress(item *Item, stdout io.ReadCloser) {
-	scanner := bufio.NewScanner(stdout)
-	progressRegex := regexp.MustCompile(`\[download\]\s+(\d+\.?\d*)%`)
-
-	for scanner.Scan() {
-		line := scanner.Text()
-
-		matches := progressRegex.FindStringSubmatch(line)
-		if len(matches) > 1 {
-			if progress, err := strconv.ParseFloat(matches[1], 64); err == nil {
-				item.Progress = progress / 100.0
-
-				select {
-				case m.progressChan <- ProgressUpdate{
-					ID:       item.ID,
-					Progress: item.Progress,
-					Status:   InProgress,
-				}:
-				case <-m.ctx.Done():
-					return
-				}
-			}
-		}
-
-		if strings.Contains(line, "[info]") && strings.Contains(line, "Downloading video") {
-
-			if titleMatch := regexp.MustCompile(`\[info\] (.+): Downloading`).FindStringSubmatch(line); len(titleMatch) > 1 {
-				item.Title = sanitizeFilename(titleMatch[1])
-			}
-		}
-	}
-}
-
-func (m *Manager) findDownloadedFile(item *Item) (string, error) {
-
-	entries, err := os.ReadDir(m.downloadDir)
-	if err != nil {
-		return "", fmt.Errorf("failed to read download directory: %w", err)
+	audioFormats := video.Formats.WithAudioChannels().Type("audio")
+	if len(audioFormats) == 0 {
+		audioFormats = video.Formats.WithAudioChannels()
 	}
 
-	videoID := extractVideoID(item.URL)
+	if len(audioFormats) == 0 {
+		return "", fmt.Errorf("no audio formats available")
+	}
 
-	var candidates []string
-	for _, entry := range entries {
-		if entry.IsDir() {
+	var bestFormat *youtube.Format
+	var bestBitrate int
+
+	for i := range audioFormats {
+		format := &audioFormats[i]
+
+		if format.AudioChannels == 0 {
 			continue
 		}
 
-		name := entry.Name()
-
-		if info, err := entry.Info(); err == nil {
-			if time.Since(info.ModTime()) < 2*time.Minute {
-
-				ext := strings.ToLower(filepath.Ext(name))
-				if ext == ".mp3" || ext == ".m4a" || ext == ".wav" || ext == ".flac" {
-					candidates = append(candidates, filepath.Join(m.downloadDir, name))
-				}
+		var bitrate int
+		if format.Bitrate > 0 {
+			bitrate = format.Bitrate
+		} else {
+			switch {
+			case format.AudioSampleRate == "48000":
+				bitrate = 160
+			case format.AudioSampleRate == "44100":
+				bitrate = 128
+			default:
+				bitrate = 96
 			}
+		}
+
+		qualityScore := bitrate * 100
+
+		if isMimeTypeAudioOnly(format.MimeType) {
+			qualityScore += 50
+		}
+
+		switch format.AudioSampleRate {
+		case "48000":
+			qualityScore += 20
+		case "44100":
+			qualityScore += 10
+		}
+
+		if format.AudioChannels >= 2 {
+			qualityScore += 5
+		}
+
+		var bestQuality int
+		if bestFormat != nil {
+			bestQuality = bestBitrate * 100
+			if isMimeTypeAudioOnly(bestFormat.MimeType) {
+				bestQuality += 50
+			}
+			switch bestFormat.AudioSampleRate {
+			case "48000":
+				bestQuality += 20
+			case "44100":
+				bestQuality += 10
+			}
+			if bestFormat.AudioChannels >= 2 {
+				bestQuality += 5
+			}
+		}
+
+		if bestFormat == nil || qualityScore > bestQuality {
+			bestFormat = format
+			bestBitrate = bitrate
 		}
 	}
 
-	if len(candidates) == 0 {
-		return "", fmt.Errorf("no downloaded file found for video ID: %s", videoID)
+	if bestFormat == nil {
+		bestFormat = &audioFormats[0]
 	}
 
-	var newestFile string
-	var newestTime time.Time
+	tempExt := getExtensionFromMimeType(bestFormat.MimeType)
+	tempFilename := fmt.Sprintf("%s_temp%s", item.Title, tempExt)
+	tempFilePath := filepath.Join(m.downloadDir, tempFilename)
 
-	for _, candidate := range candidates {
-		if info, err := os.Stat(candidate); err == nil {
-			if newestFile == "" || info.ModTime().After(newestTime) {
-				newestFile = candidate
-				newestTime = info.ModTime()
+	finalFilename := fmt.Sprintf("%s.mp3", item.Title)
+	finalFilePath := filepath.Join(m.downloadDir, finalFilename)
+
+	stream, size, err := client.GetStream(video, bestFormat)
+	if err != nil {
+		return "", fmt.Errorf("failed to get stream: %w", err)
+	}
+	defer stream.Close()
+
+	tempFile, err := os.Create(tempFilePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp file: %w", err)
+	}
+	defer tempFile.Close()
+
+	item.Size = size
+
+	err = m.copyWithProgress(ctx, item, stream, tempFile)
+	if err != nil {
+		os.Remove(tempFilePath)
+		return "", err
+	}
+	tempFile.Close()
+
+	thumbnailPath, err := m.downloadThumbnail(video, item.Title)
+	if err != nil {
+		thumbnailPath = ""
+	}
+
+	m.updateStatus(item.ID, InProgress, "Converting to MP3...")
+
+	err = m.convertToMP3WithMetadata(ctx, tempFilePath, finalFilePath, thumbnailPath, video)
+	if err != nil {
+		copyErr := m.copyFileAsMP3(tempFilePath, finalFilePath)
+		if copyErr != nil {
+			os.Remove(tempFilePath)
+			if thumbnailPath != "" {
+				os.Remove(thumbnailPath)
 			}
+			return "", fmt.Errorf("failed to convert to MP3 and fallback copy failed: convert error: %w, copy error: %v", err, copyErr)
 		}
 	}
 
-	if newestFile == "" {
-		return "", fmt.Errorf("could not determine downloaded file for video ID: %s", videoID)
+	os.Remove(tempFilePath)
+	if thumbnailPath != "" {
+		os.Remove(thumbnailPath)
 	}
 
-	item.Filename = filepath.Base(newestFile)
+	item.Filename = finalFilename
+	return finalFilePath, nil
+}
 
-	return newestFile, nil
+func (m *Manager) createClient() (youtube.Client, error) {
+	client := youtube.Client{
+		HTTPClient: &http.Client{
+			Transport: &http.Transport{
+				TLSHandshakeTimeout: 10 * time.Second,
+			},
+			Timeout: 30 * time.Second,
+		},
+	}
+
+	client.HTTPClient.Transport = &headerTransport{
+		Transport: client.HTTPClient.Transport,
+		Headers: map[string]string{
+			"User-Agent":               "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+			"Accept":                   "*/*",
+			"Accept-Language":          "en-US,en;q=0.9",
+			"Accept-Encoding":          "identity",
+			"Cache-Control":            "no-cache",
+			"Pragma":                   "no-cache",
+			"Sec-Ch-Ua":                "\"Not A(Brand\";v=\"99\", \"Google Chrome\";v=\"121\", \"Chromium\";v=\"121\"",
+			"Sec-Ch-Ua-Mobile":         "?0",
+			"Sec-Ch-Ua-Platform":       "\"Windows\"",
+			"Sec-Fetch-Dest":           "empty",
+			"Sec-Fetch-Mode":           "cors",
+			"Sec-Fetch-Site":           "same-origin",
+			"X-Youtube-Client-Name":    "1",
+			"X-Youtube-Client-Version": "2.20240125.00.00",
+		},
+	}
+
+	return client, nil
+}
+
+func (m *Manager) downloadThumbnail(video *youtube.Video, title string) (string, error) {
+	if len(video.Thumbnails) == 0 {
+		return "", fmt.Errorf("no thumbnails available")
+	}
+
+	var thumbnail youtube.Thumbnail
+	var bestArea uint = 0
+	for _, t := range video.Thumbnails {
+		area := t.Width * t.Height
+		if area > bestArea {
+			bestArea = area
+			thumbnail = t
+		}
+	}
+
+	if bestArea == 0 {
+		thumbnail = video.Thumbnails[len(video.Thumbnails)-1]
+	}
+
+	resp, err := http.Get(thumbnail.URL)
+	if err != nil {
+		return "", fmt.Errorf("failed to download thumbnail: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("failed to download thumbnail: status %d", resp.StatusCode)
+	}
+
+	ext := ".jpg"
+	contentType := resp.Header.Get("Content-Type")
+	switch contentType {
+	case "image/png":
+		ext = ".png"
+	case "image/webp":
+		ext = ".webp"
+	case "image/jpeg", "image/jpg":
+		ext = ".jpg"
+	default:
+		if strings.Contains(thumbnail.URL, ".png") {
+			ext = ".png"
+		} else if strings.Contains(thumbnail.URL, ".webp") {
+			ext = ".webp"
+		}
+	}
+
+	thumbnailPath := filepath.Join(m.downloadDir, fmt.Sprintf("%s_thumb%s", sanitizeFilename(title), ext))
+	file, err := os.Create(thumbnailPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to create thumbnail file: %w", err)
+	}
+	defer file.Close()
+
+	_, err = io.Copy(file, resp.Body)
+	if err != nil {
+		os.Remove(thumbnailPath)
+		return "", fmt.Errorf("failed to save thumbnail: %w", err)
+	}
+
+	return thumbnailPath, nil
+}
+
+func (m *Manager) isFFmpegAvailable() bool {
+	_, err := exec.LookPath("ffmpeg")
+	return err == nil
+}
+
+func (m *Manager) convertToMP3WithMetadata(ctx context.Context, inputPath, outputPath, thumbnailPath string, video *youtube.Video) error {
+	if !m.isFFmpegAvailable() {
+		return fmt.Errorf("ffmpeg not found in PATH")
+	}
+
+	args := []string{"-y"}
+
+	args = append(args, "-i", inputPath)
+	if thumbnailPath != "" {
+		args = append(args, "-i", thumbnailPath)
+	}
+
+	if thumbnailPath != "" {
+		args = append(args, "-map", "0:a", "-map", "1:v")
+		args = append(args, "-c:v", "mjpeg")
+		args = append(args, "-disposition:v", "attached_pic")
+	}
+
+	args = append(args, "-c:a", "libmp3lame")
+	args = append(args, "-b:a", "192k")
+	args = append(args, "-ar", "44100")
+	args = append(args, "-id3v2_version", "3")
+
+	title := m.escapeMetadata(video.Title)
+	artist := m.escapeMetadata(m.getVideoAuthor(video))
+	year := m.getVideoYear(video)
+	description := m.escapeMetadata(m.truncateString(video.Description, 100))
+
+	args = append(args,
+		"-metadata", fmt.Sprintf("title=%s", title),
+		"-metadata", fmt.Sprintf("artist=%s", artist),
+		"-metadata", fmt.Sprintf("album=%s", title),
+		"-metadata", fmt.Sprintf("date=%s", year),
+		"-metadata", fmt.Sprintf("comment=%s", description),
+	)
+
+	args = append(args, outputPath)
+
+	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	if err != nil {
+		return fmt.Errorf("ffmpeg conversion failed: %w, stderr: %s", err, stderr.String())
+	}
+
+	return nil
+}
+
+func (m *Manager) truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen]
+}
+
+func isMimeTypeAudioOnly(mimeType string) bool {
+	return mimeType == "audio/mp4" || mimeType == "audio/webm" || strings.HasPrefix(mimeType, "audio/")
+}
+
+func (m *Manager) escapeMetadata(value string) string {
+	value = strings.ReplaceAll(value, "\"", "'")
+	value = strings.ReplaceAll(value, "\\", "/")
+	value = strings.ReplaceAll(value, "\n", " ")
+	value = strings.ReplaceAll(value, "\r", " ")
+	value = strings.ReplaceAll(value, "=", "-")
+	value = strings.ReplaceAll(value, ";", ",")
+
+	return strings.TrimSpace(value)
+}
+
+func (m *Manager) getVideoAuthor(video *youtube.Video) string {
+	if video.Author != "" {
+		return video.Author
+	}
+	return "Unknown Artist"
+}
+
+func (m *Manager) getVideoYear(video *youtube.Video) string {
+	if !video.PublishDate.IsZero() {
+		return video.PublishDate.Format("2006")
+	}
+	return time.Now().Format("2006")
+}
+
+func (m *Manager) copyFileAsMP3(srcPath, dstPath string) error {
+	srcFile, err := os.Open(srcPath)
+	if err != nil {
+		return fmt.Errorf("failed to open source file: %w", err)
+	}
+	defer srcFile.Close()
+
+	dstFile, err := os.Create(dstPath)
+	if err != nil {
+		return fmt.Errorf("failed to create destination file: %w", err)
+	}
+	defer dstFile.Close()
+
+	_, err = io.Copy(dstFile, srcFile)
+	if err != nil {
+		return fmt.Errorf("failed to copy file: %w", err)
+	}
+
+	return nil
 }
 
 func (m *Manager) extractMetadataAndCreateSong(filePath string) (*lib.Song, error) {
@@ -406,7 +697,7 @@ func (m *Manager) extractMetadataAndCreateSong(filePath string) (*lib.Song, erro
 
 		return &lib.Song{
 			Title:  name,
-			Artist: "YouTube",
+			Artist: "Unknown",
 			Album:  "Downloaded",
 			Genre:  "Unknown",
 			Path:   filePath,
@@ -421,7 +712,7 @@ func (m *Manager) extractMetadataAndCreateSong(filePath string) (*lib.Song, erro
 
 	artist := meta.Artist()
 	if artist == "" {
-		artist = "YouTube"
+		artist = "Unknown"
 	}
 
 	album := meta.Album()
@@ -431,7 +722,7 @@ func (m *Manager) extractMetadataAndCreateSong(filePath string) (*lib.Song, erro
 
 	genre := meta.Genre()
 	if genre == "" {
-		genre = "YouTube"
+		genre = "Unknown"
 	}
 
 	var picture *tag.Picture
@@ -485,4 +776,92 @@ func (m *Manager) completeWithError(item *Item, err error) {
 	}:
 	case <-m.ctx.Done():
 	}
+}
+
+func (m *Manager) copyWithProgress(ctx context.Context, item *Item, src io.Reader, dst io.Writer) error {
+	buffer := make([]byte, 32*1024)
+	var written int64
+
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("download cancelled")
+		default:
+		}
+
+		nr, er := src.Read(buffer)
+		if nr > 0 {
+			nw, ew := dst.Write(buffer[0:nr])
+			if nw < 0 || nr < nw {
+				nw = 0
+				if ew == nil {
+					ew = fmt.Errorf("invalid write result")
+				}
+			}
+			written += int64(nw)
+			if ew != nil {
+				return ew
+			}
+			if nr != nw {
+				return fmt.Errorf("short write")
+			}
+
+			item.Downloaded = written
+			if item.Size > 0 {
+				item.Progress = float64(written) / float64(item.Size)
+			}
+
+			select {
+			case m.progressChan <- ProgressUpdate{
+				ID:         item.ID,
+				Progress:   item.Progress,
+				Downloaded: written,
+				Status:     InProgress,
+			}:
+			case <-ctx.Done():
+				return fmt.Errorf("download cancelled")
+			}
+		}
+		if er != nil {
+			if er != io.EOF {
+				return er
+			}
+			break
+		}
+	}
+	return nil
+}
+
+func getExtensionFromMimeType(mimeType string) string {
+	switch {
+	case strings.Contains(mimeType, "mp4"):
+		return ".mp4"
+	case strings.Contains(mimeType, "webm"):
+		return ".webm"
+	case strings.Contains(mimeType, "m4a"):
+		return ".m4a"
+	case strings.Contains(mimeType, "mp3"):
+		return ".mp3"
+	case strings.Contains(mimeType, "audio"):
+		return ".m4a"
+	default:
+		return ".mp4"
+	}
+}
+
+type headerTransport struct {
+	Transport http.RoundTripper
+	Headers   map[string]string
+}
+
+func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	for key, value := range t.Headers {
+		req.Header.Set(key, value)
+	}
+
+	if t.Transport == nil {
+		t.Transport = http.DefaultTransport
+	}
+
+	return t.Transport.RoundTrip(req)
 }

@@ -351,6 +351,25 @@ func (m *DownloaderModel) handleListMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case "x":
+		if len(m.downloads) > 0 && m.cursor < len(m.downloads) && m.downloaderManager != nil {
+			download := m.downloads[m.cursor]
+			switch download.Status {
+			case downloader.InProgress, downloader.Pending:
+				err := m.downloaderManager.CancelDownload(download.ID)
+				if err != nil {
+					m.setError(err.Error())
+				}
+			case downloader.Cancelled, downloader.Completed, downloader.Failed:
+				err := m.downloaderManager.RemoveDownload(download.ID)
+				if err != nil {
+					m.setError(err.Error())
+				}
+			}
+			m.refreshDownloads()
+		}
+		return m, nil
+
 	default:
 		return m, nil
 	}
@@ -619,6 +638,7 @@ func (m *DownloaderModel) renderHelpSection(currentStyles DownloaderStyles) stri
 		} else {
 			helpParts = []string{
 				"↑/↓ navigate",
+				"x cancel/remove",
 				"d delete",
 				"c clear completed",
 				"r retry",
@@ -634,7 +654,7 @@ func (m *DownloaderModel) renderHelpSection(currentStyles DownloaderStyles) stri
 	if m.inputMode {
 		statusText = "Paste YouTube URL and press Enter • Tab to switch to list"
 	} else {
-		statusText = "Navigate with ↑/↓ • Tab to switch to input"
+		statusText = "Navigate with ↑/↓ • x to cancel/remove • Tab to switch to input"
 	}
 	return helpStyle.Render(currentStyles.Help.Render(statusText))
 }
@@ -644,26 +664,40 @@ func (m *DownloaderModel) generateProgressBar(width int, progress float64) strin
 		return ""
 	}
 
-	var currentStyles DownloaderStyles
-	if m.currentSong != nil {
-		currentStyles = m.GetColoredStyles(m.dominantColor)
-	} else {
-		currentStyles = m.styles
+	blocks := []string{"░", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"}
+
+	exactPos := progress * float64(width)
+	filledColor := m.dominantColor
+	if filledColor == "" {
+		filledColor = DefaultAccentColor
+	}
+	emptyColor := Colors.DarkenColor(filledColor, DarkenFactor)
+
+	filledStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(filledColor))
+	emptyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(emptyColor))
+
+	var finalBar strings.Builder
+
+	for i := range width {
+		charProgress := exactPos - float64(i)
+
+		var char string
+		var style lipgloss.Style
+
+		if charProgress <= 0 {
+			char = "░"
+			style = emptyStyle
+		} else if charProgress >= 1.0 {
+			char = "█"
+			style = filledStyle
+		} else {
+			blockIndex := max(min(int(charProgress*ProgressBarStep)+1, ProgressBarStep), 1)
+			char = blocks[blockIndex]
+			style = filledStyle
+		}
+
+		finalBar.WriteString(style.Render(char))
 	}
 
-	progressBar := CreateProgressBar(width, progress, '█', '░')
-
-	filledWidth := ClampInt(int(progress*float64(width)), 0, width)
-	emptyWidth := width - filledWidth
-
-	filled := progressBar[:filledWidth]
-	empty := progressBar[filledWidth:]
-
-	if filledWidth > 0 && emptyWidth > 0 {
-		return currentStyles.ProgressFill.Render(filled) + currentStyles.ProgressBar.Render(empty)
-	} else if filledWidth > 0 {
-		return currentStyles.ProgressFill.Render(filled)
-	} else {
-		return currentStyles.ProgressBar.Render(empty)
-	}
+	return finalBar.String()
 }

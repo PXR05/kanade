@@ -324,6 +324,11 @@ func (m *PlayerModel) View() string {
 	var content strings.Builder
 
 	if m.currentSong == nil {
+		topPadding := SafeMax(m.height/2, 0, DefaultPadding)
+
+		for range topPadding {
+			content.WriteString("\n")
+		}
 
 		centerStyle := lipgloss.NewStyle().
 			Width(m.width).

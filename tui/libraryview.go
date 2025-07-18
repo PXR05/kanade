@@ -480,10 +480,6 @@ func (m *LibraryModel) SetPlaybackStatus(isPlaying bool) {
 	m.isPlaying = isPlaying
 }
 
-func (m *LibraryModel) IsInSearchMode() bool {
-	return m.searchMode
-}
-
 func (m *LibraryModel) getGroupingModeText() string {
 	switch m.groupingMode {
 	case NoGrouping:
