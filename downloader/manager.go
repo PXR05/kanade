@@ -288,7 +288,7 @@ func (m *Manager) processDownload(item *Item) {
 		return
 	}
 
-	filePath, err := m.downloadVideo(downloadCtx, item)
+	filePath, err := m.downloadWithRetry(downloadCtx, item)
 	if err != nil {
 		select {
 		case <-downloadCtx.Done():
@@ -321,6 +321,32 @@ func (m *Manager) processDownload(item *Item) {
 	}:
 	case <-m.ctx.Done():
 	}
+}
+
+func (m *Manager) downloadWithRetry(ctx context.Context, item *Item) (string, error) {
+	maxRetries := 3
+	baseDelay := time.Second
+
+	for attempt := range maxRetries {
+		filePath, err := m.downloadVideo(ctx, item)
+		if err == nil {
+			return filePath, nil
+		}
+
+		if strings.Contains(err.Error(), "403") || strings.Contains(err.Error(), "Forbidden") {
+			delay := baseDelay * time.Duration(1<<attempt)
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(delay):
+				continue
+			}
+		}
+
+		return "", err
+	}
+
+	return "", fmt.Errorf("max retries exceeded")
 }
 
 func (m *Manager) downloadVideo(ctx context.Context, item *Item) (string, error) {
@@ -371,10 +397,10 @@ func (m *Manager) downloadVideo(ctx context.Context, item *Item) (string, error)
 		if format.Bitrate > 0 {
 			bitrate = format.Bitrate
 		} else {
-			switch {
-			case format.AudioSampleRate == "48000":
+			switch format.AudioSampleRate {
+			case "48000":
 				bitrate = 160
-			case format.AudioSampleRate == "44100":
+			case "44100":
 				bitrate = 128
 			default:
 				bitrate = 96
@@ -486,28 +512,32 @@ func (m *Manager) createClient() (youtube.Client, error) {
 		HTTPClient: &http.Client{
 			Transport: &http.Transport{
 				TLSHandshakeTimeout: 10 * time.Second,
+				DisableCompression:  false,
+				MaxIdleConns:        10,
+				IdleConnTimeout:     30 * time.Second,
 			},
-			Timeout: 30 * time.Second,
+			Timeout: 60 * time.Second,
 		},
 	}
 
 	client.HTTPClient.Transport = &headerTransport{
 		Transport: client.HTTPClient.Transport,
 		Headers: map[string]string{
-			"User-Agent":               "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-			"Accept":                   "*/*",
-			"Accept-Language":          "en-US,en;q=0.9",
-			"Accept-Encoding":          "identity",
-			"Cache-Control":            "no-cache",
-			"Pragma":                   "no-cache",
-			"Sec-Ch-Ua":                "\"Not A(Brand\";v=\"99\", \"Google Chrome\";v=\"121\", \"Chromium\";v=\"121\"",
-			"Sec-Ch-Ua-Mobile":         "?0",
-			"Sec-Ch-Ua-Platform":       "\"Windows\"",
-			"Sec-Fetch-Dest":           "empty",
-			"Sec-Fetch-Mode":           "cors",
-			"Sec-Fetch-Site":           "same-origin",
-			"X-Youtube-Client-Name":    "1",
-			"X-Youtube-Client-Version": "2.20240125.00.00",
+			"User-Agent":                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+			"Accept":                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+			"Accept-Language":           "en-US,en;q=0.9",
+			"Accept-Encoding":           "gzip, deflate, br",
+			"Cache-Control":             "no-cache",
+			"Pragma":                    "no-cache",
+			"Sec-Ch-Ua":                 `"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"`,
+			"Sec-Ch-Ua-Mobile":          "?0",
+			"Sec-Ch-Ua-Platform":        `"Windows"`,
+			"Sec-Fetch-Dest":            "document",
+			"Sec-Fetch-Mode":            "navigate",
+			"Sec-Fetch-Site":            "none",
+			"Sec-Fetch-User":            "?1",
+			"Upgrade-Insecure-Requests": "1",
+			"X-Requested-With":          "XMLHttpRequest",
 		},
 	}
 
@@ -717,7 +747,7 @@ func (m *Manager) extractMetadataAndCreateSong(filePath string) (*lib.Song, erro
 
 	album := meta.Album()
 	if album == "" {
-		album = "Downloaded"
+		album = title
 	}
 
 	genre := meta.Genre()
@@ -857,6 +887,10 @@ type headerTransport struct {
 func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	for key, value := range t.Headers {
 		req.Header.Set(key, value)
+	}
+
+	if strings.Contains(req.URL.String(), "youtube.com") || strings.Contains(req.URL.String(), "googlevideo.com") {
+		req.Header.Set("Referer", "https://www.youtube.com/")
 	}
 
 	if t.Transport == nil {

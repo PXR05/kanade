@@ -259,11 +259,11 @@ func (m *DownloaderModel) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if err != nil {
 				m.setError(err.Error())
 			} else {
+				m.inputValue = ""
 				return m, func() tea.Msg {
 					return DownloadAddedMsg{ID: id, URL: m.inputValue}
 				}
 			}
-			m.inputValue = ""
 		}
 		return m, nil
 

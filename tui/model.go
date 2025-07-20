@@ -20,9 +20,10 @@ const (
 )
 
 type Model struct {
-	currentView ViewState
-	width       int
-	height      int
+	previousView ViewState
+	currentView  ViewState
+	width        int
+	height       int
 
 	libraryModel    *LibraryModel
 	playerModel     *PlayerModel
@@ -44,7 +45,8 @@ type Model struct {
 
 type (
 	SongSelectedMsg struct {
-		Song lib.Song
+		Song     lib.Song
+		KeepView bool
 	}
 
 	NextTrackMsg    struct{}
@@ -105,6 +107,7 @@ func NewModel(library *lib.Library, audioPlayer *audio.Player, downloaderManager
 	downloaderModel.SetDownloaderManager(downloaderManager)
 
 	model := &Model{
+		previousView:      LibraryView,
 		currentView:       LibraryView,
 		library:           library,
 		audioPlayer:       audioPlayer,
@@ -197,19 +200,35 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				break
 			}
 			return m, tea.Quit
+
 		case "esc":
 			if m.currentView == PlayerView {
 				m.currentView = LibraryView
 				return m, nil
 			}
+
+		case "tab":
+			if m.currentView != PlayerView {
+				m.previousView = m.currentView
+				return m, func() tea.Msg {
+					return SwitchViewMsg{View: PlayerView}
+				}
+			} else {
+				return m, func() tea.Msg {
+					return SwitchViewMsg{View: m.previousView}
+				}
+			}
+
 		case "alt+1":
 			return m, func() tea.Msg {
 				return SwitchViewMsg{View: LibraryView}
 			}
+
 		case "alt+2":
 			return m, func() tea.Msg {
 				return SwitchViewMsg{View: PlayerView}
 			}
+
 		case "alt+3":
 			return m, func() tea.Msg {
 				return SwitchViewMsg{View: DownloaderView}
@@ -239,7 +258,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case SwitchViewMsg:
 		m.currentView = msg.View
-
 		return m, nil
 
 	case DownloadProgressMsg:
@@ -336,7 +354,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) handleSongSelection(msg SongSelectedMsg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
-	m.currentView = PlayerView
+	if !msg.KeepView {
+		m.currentView = PlayerView
+	}
 
 	m.currentSongIndex = m.libraryModel.FindSongIndex(msg.Song)
 
@@ -437,7 +457,7 @@ func (m *Model) playNextTrack() tea.Cmd {
 	nextSong := orderedSongs[nextIndex]
 
 	return func() tea.Msg {
-		return SongSelectedMsg{Song: nextSong}
+		return SongSelectedMsg{Song: nextSong, KeepView: true}
 	}
 }
 
@@ -459,6 +479,6 @@ func (m *Model) playPreviousTrack() tea.Cmd {
 	prevSong := orderedSongs[prevIndex]
 
 	return func() tea.Msg {
-		return SongSelectedMsg{Song: prevSong}
+		return SongSelectedMsg{Song: prevSong, KeepView: true}
 	}
 }

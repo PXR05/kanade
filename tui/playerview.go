@@ -138,7 +138,6 @@ func (m *PlayerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case TickMsg:
-
 		if m.audioPlayer != nil && m.currentSong != nil {
 			m.updatePlaybackStatus()
 
@@ -165,13 +164,6 @@ func (m *PlayerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		switch msg.String() {
-		case "tab":
-			if m.currentSong != nil {
-				return m, func() tea.Msg {
-					return SwitchViewMsg{View: LibraryView}
-				}
-			}
-
 		case " ", "p":
 			if m.isPlaying {
 				err := m.audioPlayer.Pause()
@@ -344,7 +336,6 @@ func (m *PlayerModel) View() string {
 	var albumArt string
 
 	if m.currentSong.Path != m.cachedSongPath {
-
 		rawDominantColor := m.albumArtRenderer.ExtractDominantColor(*m.currentSong)
 		m.cachedDominantColor = Colors.AdjustColorForContrast(rawDominantColor)
 		m.cachedAlbumArt = m.albumArtRenderer.RenderAlbumArt(*m.currentSong)

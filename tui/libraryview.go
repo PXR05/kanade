@@ -47,7 +47,6 @@ type LibraryModel struct {
 	dominantColor string
 	searchMode    bool
 	searchQuery   string
-	showHelp      bool
 	position      time.Duration
 	totalDuration time.Duration
 
@@ -85,7 +84,6 @@ func NewLibraryModel(songs []lib.Song) *LibraryModel {
 		dominantColor:  DefaultAccentColor,
 		searchMode:     false,
 		searchQuery:    "",
-		showHelp:       false,
 		groupingMode:   NoGrouping,
 		expandedGroups: make(map[string]bool),
 	}
@@ -373,22 +371,17 @@ func (m *LibraryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if m.searchMode {
 			switch msg.String() {
-			case "esc":
-				m.searchMode = false
-				m.searchQuery = ""
-				m.filteredSongs = m.songs
-				m.rebuildDisplayItems()
-				m.cursor = 0
-				return m, nil
 			case "enter":
 				m.searchMode = false
 				return m, nil
+				
 			case "backspace":
 				if len(m.searchQuery) > 0 {
 					m.searchQuery = m.searchQuery[:len(m.searchQuery)-1]
 					m.filterSongs()
 				}
 				return m, nil
+				
 			default:
 				if len(msg.String()) == 1 {
 					m.searchQuery += msg.String()
@@ -399,6 +392,14 @@ func (m *LibraryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		switch msg.String() {
+		case "esc":
+			m.searchMode = false
+			m.searchQuery = ""
+			m.filteredSongs = m.songs
+			m.rebuildDisplayItems()
+			m.cursor = 0
+			return m, nil
+			
 		case "/":
 			m.searchMode = true
 			m.searchQuery = ""
@@ -417,23 +418,12 @@ func (m *LibraryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-		case "tab":
-			if m.currentSong != nil {
-				return m, func() tea.Msg {
-					return SwitchViewMsg{View: PlayerView}
-				}
-			}
-
 		case "g":
 			m.toggleGrouping()
 			return m, nil
 
 		case "c":
 			m.jumpToCurrentSong()
-			return m, nil
-
-		case "?":
-			m.showHelp = !m.showHelp
 			return m, nil
 
 		case "up", "k":
@@ -869,56 +859,46 @@ func (m *LibraryModel) View() string {
 
 	helpStyle := lipgloss.NewStyle().Padding(0, MinimumPadding)
 
-	if (m.showHelp && !m.searchMode) || m.searchMode {
-		var helpText string
-		if m.searchMode {
-			helpText = "Type to search • Enter confirm • Esc cancel"
-		} else {
-			helpText = BuildHelpText(NavigationKeys, ActionKeys)
+	var leftContent string
+	if m.currentSong != nil {
+		songText := fmt.Sprintf("♪ %s", m.currentSong.Title)
+		if m.currentSong.Artist != "" {
+			songText = fmt.Sprintf("♪ %s - %s", m.currentSong.Artist, m.currentSong.Title)
 		}
-		bottomLine = helpStyle.Render(currentStyles.Help.Render(helpText))
+
+		if m.totalDuration > 0 {
+			positionText := fmt.Sprintf("%s / %s", FormatDuration(m.position), FormatDuration(m.totalDuration))
+			songText += fmt.Sprintf(" [%s]", positionText)
+		}
+
+		leftContent = songText
 	} else {
-		var leftContent string
-		if m.currentSong != nil {
-			songText := fmt.Sprintf("♪ %s", m.currentSong.Title)
-			if m.currentSong.Artist != "" {
-				songText = fmt.Sprintf("♪ %s - %s", m.currentSong.Artist, m.currentSong.Title)
-			}
-
-			if m.totalDuration > 0 {
-				positionText := fmt.Sprintf("%s / %s", FormatDuration(m.position), FormatDuration(m.totalDuration))
-				songText += fmt.Sprintf(" [%s]", positionText)
-			}
-
-			leftContent = songText
-		} else {
-			leftContent = "No song playing"
-		}
-
-		pageInfo := fmt.Sprintf("Item %d of %d", m.cursor+1, len(m.displayItems))
-
-		groupingText := m.getGroupingModeText()
-		pageInfo += fmt.Sprintf(" • %s", groupingText)
-
-		if m.groupingMode == NoGrouping {
-			layout := m.getColumnLayout()
-			var layoutText string
-			switch layout {
-			case ThreeColumn:
-				layoutText = "3 Columns"
-			case TwoColumn:
-				layoutText = "2 Columns"
-			case SingleColumn:
-				layoutText = "1 Column"
-			}
-			pageInfo += fmt.Sprintf(" • %s", layoutText)
-		}
-
-		rightContent := pageInfo
-
-		spacedContent := JoinHorizontalWithSpacing(leftContent, rightContent, m.width-BorderAccountWidth)
-		bottomLine = helpStyle.Render(currentStyles.Help.Render(spacedContent))
+		leftContent = "No song playing"
 	}
+
+	pageInfo := fmt.Sprintf("Item %d of %d", m.cursor+1, len(m.displayItems))
+
+	groupingText := m.getGroupingModeText()
+	pageInfo += fmt.Sprintf(" • %s", groupingText)
+
+	if m.groupingMode == NoGrouping {
+		layout := m.getColumnLayout()
+		var layoutText string
+		switch layout {
+		case ThreeColumn:
+			layoutText = "3 Columns"
+		case TwoColumn:
+			layoutText = "2 Columns"
+		case SingleColumn:
+			layoutText = "1 Column"
+		}
+		pageInfo += fmt.Sprintf(" • %s", layoutText)
+	}
+
+	rightContent := pageInfo
+
+	spacedContent := JoinHorizontalWithSpacing(leftContent, rightContent, m.width-BorderAccountWidth)
+	bottomLine = helpStyle.Render(currentStyles.Help.Render(spacedContent))
 
 	content.WriteString(bottomLine)
 
