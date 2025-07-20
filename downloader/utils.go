@@ -133,3 +133,35 @@ func StatusToString(status Status) string {
 		return "UNKNOWN"
 	}
 }
+
+func getExtensionFromMimeType(mimeType string) string {
+	switch {
+	case strings.Contains(mimeType, "mp4"):
+		return ".mp4"
+	case strings.Contains(mimeType, "webm"):
+		return ".webm"
+	case strings.Contains(mimeType, "m4a"):
+		return ".m4a"
+	case strings.Contains(mimeType, "mp3"):
+		return ".mp3"
+	case strings.Contains(mimeType, "audio"):
+		return ".m4a"
+	default:
+		return ".mp4"
+	}
+}
+
+func isMimeTypeAudioOnly(mimeType string) bool {
+	return mimeType == "audio/mp4" || mimeType == "audio/webm" || strings.HasPrefix(mimeType, "audio/")
+}
+
+func (m *DownloadManager) escapeMetadata(value string) string {
+	value = strings.ReplaceAll(value, "\"", "'")
+	value = strings.ReplaceAll(value, "\\", "/")
+	value = strings.ReplaceAll(value, "\n", " ")
+	value = strings.ReplaceAll(value, "\r", " ")
+	value = strings.ReplaceAll(value, "=", "-")
+	value = strings.ReplaceAll(value, ";", ",")
+
+	return strings.TrimSpace(value)
+}

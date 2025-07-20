@@ -27,7 +27,7 @@ type DownloaderModel struct {
 	inputMode  bool
 	focusMode  FocusMode
 
-	downloads []*downloader.Item
+	downloads []*downloader.DownloadItem
 	cursor    int
 
 	styles        DownloaderStyles
@@ -40,7 +40,7 @@ type DownloaderModel struct {
 	viewportTop   int
 	visibleHeight int
 
-	downloaderManager *downloader.Manager
+	downloaderManager *downloader.DownloadManager
 }
 
 type DownloaderStyles struct {
@@ -63,7 +63,7 @@ func NewDownloaderModel() *DownloaderModel {
 		inputValue:    "",
 		inputMode:     true,
 		focusMode:     FocusInput,
-		downloads:     []*downloader.Item{},
+		downloads:     []*downloader.DownloadItem{},
 		cursor:        0,
 		styles:        DefaultDownloaderStyles(),
 		visibleHeight: DefaultVisibleItems,
@@ -72,7 +72,7 @@ func NewDownloaderModel() *DownloaderModel {
 	}
 }
 
-func (m *DownloaderModel) SetDownloaderManager(manager *downloader.Manager) {
+func (m *DownloaderModel) SetDownloaderManager(manager *downloader.DownloadManager) {
 	m.downloaderManager = manager
 }
 

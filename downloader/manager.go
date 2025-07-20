@@ -29,7 +29,7 @@ const (
 	Cancelled
 )
 
-type Item struct {
+type DownloadItem struct {
 	ID          string
 	URL         string
 	Title       string
@@ -53,16 +53,16 @@ type ProgressUpdate struct {
 
 type CompletionEvent struct {
 	ID       string
-	Item     *Item
+	Item     *DownloadItem
 	Song     *lib.Song
 	FilePath string
 	Error    error
 }
 
-type Manager struct {
-	items        map[string]*Item
+type DownloadManager struct {
+	items        map[string]*DownloadItem
 	order        []string
-	queue        chan *Item
+	queue        chan *DownloadItem
 	progressChan chan ProgressUpdate
 	completeChan chan CompletionEvent
 	library      *lib.Library
@@ -77,13 +77,13 @@ type Manager struct {
 	cancelMapMu  sync.RWMutex
 }
 
-func NewManager(library *lib.Library, downloadDir string, workers int) *Manager {
+func NewManager(library *lib.Library, downloadDir string, workers int) *DownloadManager {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	return &Manager{
-		items:        make(map[string]*Item),
+	return &DownloadManager{
+		items:        make(map[string]*DownloadItem),
 		order:        make([]string, 0),
-		queue:        make(chan *Item, 100),
+		queue:        make(chan *DownloadItem, 100),
 		progressChan: make(chan ProgressUpdate, 100),
 		completeChan: make(chan CompletionEvent, 100),
 		library:      library,
@@ -96,14 +96,14 @@ func NewManager(library *lib.Library, downloadDir string, workers int) *Manager 
 	}
 }
 
-func (m *Manager) Start() {
+func (m *DownloadManager) Start() {
 	for i := 0; i < m.workers; i++ {
 		m.wg.Add(1)
 		go m.worker()
 	}
 }
 
-func (m *Manager) Stop() {
+func (m *DownloadManager) Stop() {
 	m.cancel()
 	close(m.queue)
 	m.wg.Wait()
@@ -111,7 +111,7 @@ func (m *Manager) Stop() {
 	close(m.completeChan)
 }
 
-func (m *Manager) AddDownload(url string) (string, error) {
+func (m *DownloadManager) AddDownload(url string) (string, error) {
 	url = strings.TrimSpace(url)
 
 	if !isValidURL(url) {
@@ -121,7 +121,7 @@ func (m *Manager) AddDownload(url string) (string, error) {
 	id := fmt.Sprintf("yt_%d", time.Now().UnixNano())
 	videoID := extractVideoID(url)
 
-	item := &Item{
+	item := &DownloadItem{
 		ID:        id,
 		URL:       url,
 		Title:     fmt.Sprintf("YouTube Video [%s]", videoID),
@@ -144,7 +144,7 @@ func (m *Manager) AddDownload(url string) (string, error) {
 	}
 }
 
-func (m *Manager) RemoveDownload(id string) error {
+func (m *DownloadManager) RemoveDownload(id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -167,11 +167,11 @@ func (m *Manager) RemoveDownload(id string) error {
 	return nil
 }
 
-func (m *Manager) GetDownloads() []*Item {
+func (m *DownloadManager) GetDownloads() []*DownloadItem {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	items := make([]*Item, 0, len(m.items))
+	items := make([]*DownloadItem, 0, len(m.items))
 	for _, id := range m.order {
 		item := m.items[id]
 		itemCopy := *item
@@ -180,15 +180,15 @@ func (m *Manager) GetDownloads() []*Item {
 	return items
 }
 
-func (m *Manager) GetProgressChannel() <-chan ProgressUpdate {
+func (m *DownloadManager) GetProgressChannel() <-chan ProgressUpdate {
 	return m.progressChan
 }
 
-func (m *Manager) GetCompletionChannel() <-chan CompletionEvent {
+func (m *DownloadManager) GetCompletionChannel() <-chan CompletionEvent {
 	return m.completeChan
 }
 
-func (m *Manager) CancelDownload(id string) error {
+func (m *DownloadManager) CancelDownload(id string) error {
 	m.cancelMapMu.RLock()
 	cancel, exists := m.cancelMap[id]
 	m.cancelMapMu.RUnlock()
@@ -211,7 +211,7 @@ func (m *Manager) CancelDownload(id string) error {
 	return nil
 }
 
-func (m *Manager) RetryDownload(id string) error {
+func (m *DownloadManager) RetryDownload(id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -238,7 +238,7 @@ func (m *Manager) RetryDownload(id string) error {
 	}
 }
 
-func (m *Manager) worker() {
+func (m *DownloadManager) worker() {
 	defer m.wg.Done()
 
 	for {
@@ -254,7 +254,7 @@ func (m *Manager) worker() {
 	}
 }
 
-func (m *Manager) processDownload(item *Item) {
+func (m *DownloadManager) processDownload(item *DownloadItem) {
 	downloadCtx, downloadCancel := context.WithCancel(m.ctx)
 	m.cancelMapMu.Lock()
 	m.cancelMap[item.ID] = downloadCancel
@@ -323,7 +323,7 @@ func (m *Manager) processDownload(item *Item) {
 	}
 }
 
-func (m *Manager) downloadWithRetry(ctx context.Context, item *Item) (string, error) {
+func (m *DownloadManager) downloadWithRetry(ctx context.Context, item *DownloadItem) (string, error) {
 	maxRetries := 3
 	baseDelay := time.Second
 
@@ -349,7 +349,7 @@ func (m *Manager) downloadWithRetry(ctx context.Context, item *Item) (string, er
 	return "", fmt.Errorf("max retries exceeded")
 }
 
-func (m *Manager) downloadVideo(ctx context.Context, item *Item) (string, error) {
+func (m *DownloadManager) downloadVideo(ctx context.Context, item *DownloadItem) (string, error) {
 	select {
 	case <-m.ctx.Done():
 		return "", fmt.Errorf("download cancelled")
@@ -507,7 +507,7 @@ func (m *Manager) downloadVideo(ctx context.Context, item *Item) (string, error)
 	return finalFilePath, nil
 }
 
-func (m *Manager) createClient() (youtube.Client, error) {
+func (m *DownloadManager) createClient() (youtube.Client, error) {
 	client := youtube.Client{
 		HTTPClient: &http.Client{
 			Transport: &http.Transport{
@@ -544,7 +544,7 @@ func (m *Manager) createClient() (youtube.Client, error) {
 	return client, nil
 }
 
-func (m *Manager) downloadThumbnail(video *youtube.Video, title string) (string, error) {
+func (m *DownloadManager) downloadThumbnail(video *youtube.Video, title string) (string, error) {
 	if len(video.Thumbnails) == 0 {
 		return "", fmt.Errorf("no thumbnails available")
 	}
@@ -606,47 +606,16 @@ func (m *Manager) downloadThumbnail(video *youtube.Video, title string) (string,
 	return thumbnailPath, nil
 }
 
-func (m *Manager) isFFmpegAvailable() bool {
-	_, err := exec.LookPath("ffmpeg")
-	return err == nil
-}
-
-func (m *Manager) convertToMP3WithMetadata(ctx context.Context, inputPath, outputPath, thumbnailPath string, video *youtube.Video) error {
-	if !m.isFFmpegAvailable() {
+func (m *DownloadManager) convertToMP3WithMetadata(ctx context.Context, inputPath, outputPath, thumbnailPath string, video *youtube.Video) error {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		return fmt.Errorf("ffmpeg not found in PATH")
 	}
 
 	args := []string{"-y"}
-
 	args = append(args, "-i", inputPath)
-	if thumbnailPath != "" {
-		args = append(args, "-i", thumbnailPath)
-	}
-
-	if thumbnailPath != "" {
-		args = append(args, "-map", "0:a", "-map", "1:v")
-		args = append(args, "-c:v", "mjpeg")
-		args = append(args, "-disposition:v", "attached_pic")
-	}
-
 	args = append(args, "-c:a", "libmp3lame")
 	args = append(args, "-b:a", "192k")
 	args = append(args, "-ar", "44100")
-	args = append(args, "-id3v2_version", "3")
-
-	title := m.escapeMetadata(video.Title)
-	artist := m.escapeMetadata(m.getVideoAuthor(video))
-	year := m.getVideoYear(video)
-	description := m.escapeMetadata(m.truncateString(video.Description, 100))
-
-	args = append(args,
-		"-metadata", fmt.Sprintf("title=%s", title),
-		"-metadata", fmt.Sprintf("artist=%s", artist),
-		"-metadata", fmt.Sprintf("album=%s", title),
-		"-metadata", fmt.Sprintf("date=%s", year),
-		"-metadata", fmt.Sprintf("comment=%s", description),
-	)
-
 	args = append(args, outputPath)
 
 	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
@@ -658,46 +627,54 @@ func (m *Manager) convertToMP3WithMetadata(ctx context.Context, inputPath, outpu
 		return fmt.Errorf("ffmpeg conversion failed: %w, stderr: %s", err, stderr.String())
 	}
 
+	err = m.embedMetadataWithWriter(outputPath, thumbnailPath, video)
+	if err != nil {
+		return fmt.Errorf("failed to embed metadata: %w", err)
+	}
+
 	return nil
 }
 
-func (m *Manager) truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
+func (m *DownloadManager) embedMetadataWithWriter(filePath, thumbnailPath string, video *youtube.Video) error {
+	meta := metadata.Metadata{
+		Title:  video.Title,
+		Artist: video.Author,
+		Album:  video.Title,
+		Year:   video.PublishDate.Format("2006"),
+		Genre:  "Unknown",
 	}
-	return s[:maxLen]
-}
 
-func isMimeTypeAudioOnly(mimeType string) bool {
-	return mimeType == "audio/mp4" || mimeType == "audio/webm" || strings.HasPrefix(mimeType, "audio/")
-}
-
-func (m *Manager) escapeMetadata(value string) string {
-	value = strings.ReplaceAll(value, "\"", "'")
-	value = strings.ReplaceAll(value, "\\", "/")
-	value = strings.ReplaceAll(value, "\n", " ")
-	value = strings.ReplaceAll(value, "\r", " ")
-	value = strings.ReplaceAll(value, "=", "-")
-	value = strings.ReplaceAll(value, ";", ",")
-
-	return strings.TrimSpace(value)
-}
-
-func (m *Manager) getVideoAuthor(video *youtube.Video) string {
-	if video.Author != "" {
-		return video.Author
+	if thumbnailPath != "" {
+		thumbnailData, err := os.ReadFile(thumbnailPath)
+		if err == nil {
+			ext := strings.ToLower(filepath.Ext(thumbnailPath))
+			var mimeType string
+			switch ext {
+			case ".jpg", ".jpeg":
+				mimeType = "image/jpeg"
+			case ".png":
+				mimeType = "image/png"
+			case ".gif":
+				mimeType = "image/gif"
+			case ".webp":
+				mimeType = "image/webp"
+			default:
+				mimeType = "image/jpeg"
+			}
+			meta.AlbumArt = metadata.Picture{
+				Ext:         ext,
+				MIMEType:    mimeType,
+				Type:        "Front cover",
+				Description: "Front cover",
+				Data:        thumbnailData,
+			}
+		}
 	}
-	return "Unknown Artist"
+
+	return metadata.WriteMetadata(filePath, meta)
 }
 
-func (m *Manager) getVideoYear(video *youtube.Video) string {
-	if !video.PublishDate.IsZero() {
-		return video.PublishDate.Format("2006")
-	}
-	return time.Now().Format("2006")
-}
-
-func (m *Manager) copyFileAsMP3(srcPath, dstPath string) error {
+func (m *DownloadManager) copyFileAsMP3(srcPath, dstPath string) error {
 	srcFile, err := os.Open(srcPath)
 	if err != nil {
 		return fmt.Errorf("failed to open source file: %w", err)
@@ -718,7 +695,7 @@ func (m *Manager) copyFileAsMP3(srcPath, dstPath string) error {
 	return nil
 }
 
-func (m *Manager) extractMetadataAndCreateSong(filePath string) (*lib.Song, error) {
+func (m *DownloadManager) extractMetadataAndCreateSong(filePath string) (*lib.Song, error) {
 	meta, err := metadata.ExtractMetadata(filePath)
 	if err != nil {
 
@@ -770,7 +747,7 @@ func (m *Manager) extractMetadataAndCreateSong(filePath string) (*lib.Song, erro
 	}, nil
 }
 
-func (m *Manager) updateStatus(id string, status Status, errorMsg string) {
+func (m *DownloadManager) updateStatus(id string, status Status, errorMsg string) {
 	m.mu.Lock()
 	item, exists := m.items[id]
 	if exists {
@@ -795,7 +772,7 @@ func (m *Manager) updateStatus(id string, status Status, errorMsg string) {
 	}
 }
 
-func (m *Manager) completeWithError(item *Item, err error) {
+func (m *DownloadManager) completeWithError(item *DownloadItem, err error) {
 	m.updateStatus(item.ID, Failed, err.Error())
 
 	select {
@@ -808,7 +785,7 @@ func (m *Manager) completeWithError(item *Item, err error) {
 	}
 }
 
-func (m *Manager) copyWithProgress(ctx context.Context, item *Item, src io.Reader, dst io.Writer) error {
+func (m *DownloadManager) copyWithProgress(ctx context.Context, item *DownloadItem, src io.Reader, dst io.Writer) error {
 	buffer := make([]byte, 32*1024)
 	var written int64
 
@@ -819,20 +796,20 @@ func (m *Manager) copyWithProgress(ctx context.Context, item *Item, src io.Reade
 		default:
 		}
 
-		nr, er := src.Read(buffer)
-		if nr > 0 {
-			nw, ew := dst.Write(buffer[0:nr])
-			if nw < 0 || nr < nw {
-				nw = 0
-				if ew == nil {
-					ew = fmt.Errorf("invalid write result")
+		n_read, err_read := src.Read(buffer)
+		if n_read > 0 {
+			n_write, err_write := dst.Write(buffer[0:n_read])
+			if n_write < 0 || n_read < n_write {
+				n_write = 0
+				if err_write == nil {
+					err_write = fmt.Errorf("invalid write result")
 				}
 			}
-			written += int64(nw)
-			if ew != nil {
-				return ew
+			written += int64(n_write)
+			if err_write != nil {
+				return err_write
 			}
-			if nr != nw {
+			if n_read != n_write {
 				return fmt.Errorf("short write")
 			}
 
@@ -852,31 +829,14 @@ func (m *Manager) copyWithProgress(ctx context.Context, item *Item, src io.Reade
 				return fmt.Errorf("download cancelled")
 			}
 		}
-		if er != nil {
-			if er != io.EOF {
-				return er
+		if err_read != nil {
+			if err_read != io.EOF {
+				return err_read
 			}
 			break
 		}
 	}
 	return nil
-}
-
-func getExtensionFromMimeType(mimeType string) string {
-	switch {
-	case strings.Contains(mimeType, "mp4"):
-		return ".mp4"
-	case strings.Contains(mimeType, "webm"):
-		return ".webm"
-	case strings.Contains(mimeType, "m4a"):
-		return ".m4a"
-	case strings.Contains(mimeType, "mp3"):
-		return ".mp3"
-	case strings.Contains(mimeType, "audio"):
-		return ".m4a"
-	default:
-		return ".mp4"
-	}
 }
 
 type headerTransport struct {

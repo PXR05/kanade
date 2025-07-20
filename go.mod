@@ -3,10 +3,12 @@ module gmp
 go 1.24.3
 
 require (
+	github.com/bogem/id3v2 v1.2.0
 	github.com/charmbracelet/bubbletea v1.3.5
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/dhowden/tag v0.0.0-20240417053706-3d75831295e8
 	github.com/gopxl/beep/v2 v2.1.1
+	github.com/kkdai/youtube/v2 v2.10.4
 )
 
 require (
@@ -24,7 +26,6 @@ require (
 	github.com/go-sourcemap/sourcemap v2.1.4+incompatible // indirect
 	github.com/google/pprof v0.0.0-20250630185457-6e76a2b096b5 // indirect
 	github.com/hajimehoshi/go-mp3 v0.3.4 // indirect
-	github.com/kkdai/youtube/v2 v2.10.4 // indirect
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-localereader v0.0.1 // indirect

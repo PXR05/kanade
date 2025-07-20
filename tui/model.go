@@ -31,7 +31,7 @@ type Model struct {
 
 	library           *lib.Library
 	audioPlayer       *audio.Player
-	downloaderManager *downloader.Manager
+	downloaderManager *downloader.DownloadManager
 	songs             []lib.Song
 	currentSongIndex  int
 
@@ -98,7 +98,7 @@ type (
 	}
 )
 
-func NewModel(library *lib.Library, audioPlayer *audio.Player, downloaderManager *downloader.Manager) *Model {
+func NewModel(library *lib.Library, audioPlayer *audio.Player, downloaderManager *downloader.DownloadManager) *Model {
 	songs := library.ListSongs()
 
 	libraryModel := NewLibraryModel(songs)

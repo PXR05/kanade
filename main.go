@@ -16,7 +16,6 @@ import (
 )
 
 func main() {
-
 	logFile, err := os.OpenFile("gmp.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	if err != nil {
 		fmt.Printf("Warning: could not open log file: %v\n", err)
