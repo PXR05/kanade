@@ -131,28 +131,3 @@ const (
 	BorderAccountWidth    = 4
 )
 
-// Key Bindings
-var (
-	// Navigation keys
-	NavigationKeys = map[string]string{
-		"up":   "Navigate up",
-		"down": "Navigate down",
-		"k":    "Navigate up (vim)",
-		"j":    "Navigate down (vim)",
-		"home": "Go to first item",
-		"end":  "Go to last item",
-	}
-
-	// Action keys
-	ActionKeys = map[string]string{
-		"enter": "Select/Play",
-		"space": "Select/Play/Pause",
-		"tab":   "Switch view",
-		"g":     "Toggle grouping",
-		"c":     "Jump to current song",
-		"/":     "Search",
-		"?":     "Toggle help",
-		"q":     "Quit",
-		"esc":   "Cancel/Back",
-	}
-)

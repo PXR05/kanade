@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"gmp/audio"
-	lib "gmp/library"
+	"kanade/audio"
+	lib "kanade/library"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"

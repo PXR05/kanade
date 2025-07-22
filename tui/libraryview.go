@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	lib "gmp/library"
+	lib "kanade/library"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -374,14 +374,14 @@ func (m *LibraryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "enter":
 				m.searchMode = false
 				return m, nil
-				
+
 			case "backspace":
 				if len(m.searchQuery) > 0 {
 					m.searchQuery = m.searchQuery[:len(m.searchQuery)-1]
 					m.filterSongs()
 				}
 				return m, nil
-				
+
 			default:
 				if len(msg.String()) == 1 {
 					m.searchQuery += msg.String()
@@ -399,7 +399,7 @@ func (m *LibraryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.rebuildDisplayItems()
 			m.cursor = 0
 			return m, nil
-			
+
 		case "/":
 			m.searchMode = true
 			m.searchQuery = ""
@@ -789,7 +789,7 @@ func (m *LibraryModel) View() string {
 	}
 
 	if len(m.songs) == 0 {
-		content.WriteString(currentStyles.Title.Render("GMP"))
+		content.WriteString(currentStyles.Title.Render("Kanade"))
 		content.WriteString("\n\n")
 		content.WriteString(currentStyles.Normal.Render("No songs found"))
 		content.WriteString("\n")
@@ -803,7 +803,7 @@ func (m *LibraryModel) View() string {
 		searchLine := fmt.Sprintf("%s%s", DefaultSearchPrompt, m.searchQuery)
 		content.WriteString(currentStyles.Title.Render(searchLine))
 	} else {
-		titleText := "GMP"
+		titleText := "Kanade"
 		content.WriteString(currentStyles.Title.Render(titleText))
 	}
 	content.WriteString("\n")
@@ -880,20 +880,6 @@ func (m *LibraryModel) View() string {
 
 	groupingText := m.getGroupingModeText()
 	pageInfo += fmt.Sprintf(" • %s", groupingText)
-
-	if m.groupingMode == NoGrouping {
-		layout := m.getColumnLayout()
-		var layoutText string
-		switch layout {
-		case ThreeColumn:
-			layoutText = "3 Columns"
-		case TwoColumn:
-			layoutText = "2 Columns"
-		case SingleColumn:
-			layoutText = "1 Column"
-		}
-		pageInfo += fmt.Sprintf(" • %s", layoutText)
-	}
 
 	rightContent := pageInfo
 

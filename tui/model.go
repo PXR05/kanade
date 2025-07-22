@@ -2,9 +2,9 @@ package tui
 
 import (
 	"fmt"
-	"gmp/audio"
-	"gmp/downloader"
-	lib "gmp/library"
+	"kanade/audio"
+	"kanade/downloader"
+	lib "kanade/library"
 	"log"
 	"time"
 

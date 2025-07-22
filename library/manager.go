@@ -2,7 +2,7 @@ package library
 
 import (
 	"fmt"
-	"gmp/metadata"
+	"kanade/metadata"
 	"os"
 	"path/filepath"
 	"strings"

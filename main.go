@@ -7,16 +7,27 @@ import (
 	"os/signal"
 	"syscall"
 
-	"gmp/audio"
-	"gmp/downloader"
-	lib "gmp/library"
-	"gmp/tui"
+	"kanade/audio"
+	"kanade/downloader"
+	"kanade/library"
+	"kanade/tui"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 func main() {
-	logFile, err := os.OpenFile("gmp.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Printf("Error getting user home directory: %v\n", err)
+		os.Exit(1)
+	}
+	logDir := homeDir + string(os.PathSeparator) + ".kanade"
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		fmt.Printf("Error creating log directory: %v\n", err)
+		os.Exit(1)
+	}
+	logFilePath := logDir + string(os.PathSeparator) + "kanade.log"
+	logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	if err != nil {
 		fmt.Printf("Warning: could not open log file: %v\n", err)
 	} else {
@@ -26,6 +37,12 @@ func main() {
 
 	var dir string
 	if len(os.Args) > 1 {
+		if os.Args[1] == "--help" || os.Args[1] == "-h" {
+			fmt.Println("Usage: kanade [directory]")
+			fmt.Println("If no directory is specified, it defaults to the current working directory.")
+			os.Exit(0)
+		}
+
 		dir = os.Args[1]
 		if err := os.Chdir(dir); err != nil {
 			fmt.Printf("Error changing directory to '%s': %v\n", dir, err)
@@ -40,14 +57,14 @@ func main() {
 		dir = currentDir
 	}
 
-	library := &lib.Library{}
+	library := &library.Library{}
 	player := audio.NewPlayer()
 
 	downloaderManager := downloader.NewManager(library, dir, 3)
 	downloaderManager.Start()
 
 	cleanup := func() {
-		log.Println("Shutting down...")
+		log.Println("Shutting down")
 		downloaderManager.Stop()
 		if err := player.Close(); err != nil {
 			log.Printf("Error closing audio player: %v", err)

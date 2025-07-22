@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync"
 
-	lib "gmp/library"
+	lib "kanade/library"
 
 	"github.com/charmbracelet/lipgloss"
 )

@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	lib "gmp/library"
-	"gmp/metadata"
+	lib "kanade/library"
+	"kanade/metadata"
 
 	"github.com/dhowden/tag"
 	"github.com/kkdai/youtube/v2"
@@ -484,9 +484,9 @@ func (m *DownloadManager) downloadVideo(ctx context.Context, item *DownloadItem)
 		thumbnailPath = ""
 	}
 
-	m.updateStatus(item.ID, InProgress, "Converting to MP3...")
+	m.updateStatus(item.ID, InProgress, "Converting to MP3")
 
-	err = m.convertToMP3WithMetadata(ctx, tempFilePath, finalFilePath, thumbnailPath, video)
+	err = m.convertToMP3(ctx, tempFilePath, finalFilePath)
 	if err != nil {
 		copyErr := m.copyFileAsMP3(tempFilePath, finalFilePath)
 		if copyErr != nil {
@@ -496,6 +496,11 @@ func (m *DownloadManager) downloadVideo(ctx context.Context, item *DownloadItem)
 			}
 			return "", fmt.Errorf("failed to convert to MP3 and fallback copy failed: convert error: %w, copy error: %v", err, copyErr)
 		}
+	}
+
+	err = m.embedMetadataWithWriter(finalFilePath, thumbnailPath, video)
+	if err != nil {
+		return "", fmt.Errorf("failed to embed metadata: %w", err)
 	}
 
 	os.Remove(tempFilePath)
@@ -606,7 +611,7 @@ func (m *DownloadManager) downloadThumbnail(video *youtube.Video, title string) 
 	return thumbnailPath, nil
 }
 
-func (m *DownloadManager) convertToMP3WithMetadata(ctx context.Context, inputPath, outputPath, thumbnailPath string, video *youtube.Video) error {
+func (m *DownloadManager) convertToMP3(ctx context.Context, inputPath, outputPath string) error {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		return fmt.Errorf("ffmpeg not found in PATH")
 	}
@@ -625,11 +630,6 @@ func (m *DownloadManager) convertToMP3WithMetadata(ctx context.Context, inputPat
 	err := cmd.Run()
 	if err != nil {
 		return fmt.Errorf("ffmpeg conversion failed: %w, stderr: %s", err, stderr.String())
-	}
-
-	err = m.embedMetadataWithWriter(outputPath, thumbnailPath, video)
-	if err != nil {
-		return fmt.Errorf("failed to embed metadata: %w", err)
 	}
 
 	return nil
@@ -698,14 +698,13 @@ func (m *DownloadManager) copyFileAsMP3(srcPath, dstPath string) error {
 func (m *DownloadManager) extractMetadataAndCreateSong(filePath string) (*lib.Song, error) {
 	meta, err := metadata.ExtractMetadata(filePath)
 	if err != nil {
-
 		baseName := filepath.Base(filePath)
 		name := strings.TrimSuffix(baseName, filepath.Ext(baseName))
 
 		return &lib.Song{
 			Title:  name,
 			Artist: "Unknown",
-			Album:  "Downloaded",
+			Album:  name,
 			Genre:  "Unknown",
 			Path:   filePath,
 		}, nil
