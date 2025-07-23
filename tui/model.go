@@ -30,12 +30,12 @@ type Model struct {
 	downloaderModel *DownloaderModel
 
 	library           *lib.Library
-	audioPlayer       *audio.Player
+	AudioPlayer       *audio.Player
 	downloaderManager *downloader.DownloadManager
 	songs             []lib.Song
 	currentSongIndex  int
 
-	selectedSong     *lib.Song
+	SelectedSong     *lib.Song
 	dominantColor    string
 	albumArtRenderer *AlbumArtRenderer
 
@@ -96,6 +96,10 @@ type (
 	DominantColorMsg struct {
 		Color string
 	}
+
+	PlayPauseMsg struct{}
+
+	StopMsg struct{}
 )
 
 func NewModel(library *lib.Library, audioPlayer *audio.Player, downloaderManager *downloader.DownloadManager) *Model {
@@ -110,7 +114,7 @@ func NewModel(library *lib.Library, audioPlayer *audio.Player, downloaderManager
 		previousView:      LibraryView,
 		currentView:       LibraryView,
 		library:           library,
-		audioPlayer:       audioPlayer,
+		AudioPlayer:       audioPlayer,
 		downloaderManager: downloaderManager,
 		songs:             songs,
 		currentSongIndex:  -1,
@@ -233,6 +237,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, func() tea.Msg {
 				return SwitchViewMsg{View: DownloaderView}
 			}
+		case "p":
+			return m, m.playPause()
 		}
 
 	case ErrorMsg:
@@ -261,7 +267,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case DownloadProgressMsg:
-
 		downloaderModel, cmd := m.downloaderModel.Update(msg)
 		m.downloaderModel = downloaderModel.(*DownloaderModel)
 		cmds = append(cmds, cmd)
@@ -269,7 +274,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.listenForDownloadProgress())
 
 	case DownloadCompletedMsg:
-
 		if msg.Event.Error == nil && msg.Event.Song != nil {
 			m.songs = m.library.ListSongs()
 			libraryModel := NewLibraryModel(m.songs)
@@ -283,7 +287,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.listenForDownloadCompletion())
 
 	case DownloadAddedMsg:
-
 		downloaderModel, cmd := m.downloaderModel.Update(msg)
 		m.downloaderModel = downloaderModel.(*DownloaderModel)
 		cmds = append(cmds, cmd)
@@ -294,14 +297,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.lastError = nil
 		}
 
-		if m.audioPlayer.HasPlaybackFinished() || m.audioPlayer.IsAtEnd() {
+		if m.AudioPlayer.HasPlaybackFinished() || m.AudioPlayer.IsAtEnd() {
 			cmds = append(cmds, func() tea.Msg {
 				return SongFinishedMsg{}
 			})
 		}
 
 		statusMsg := PlaybackStatusMsg{
-			IsPlaying: m.audioPlayer.IsPlaying(),
+			IsPlaying: m.AudioPlayer.IsPlaying(),
 		}
 
 		libraryModel, _ := m.libraryModel.Update(statusMsg)
@@ -309,14 +312,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if m.currentView == LibraryView {
 			positionMsg := PlaybackPositionMsg{
-				Position:      m.audioPlayer.GetPlaybackPosition(),
-				TotalDuration: m.audioPlayer.GetTotalLength(),
+				Position:      m.AudioPlayer.GetPlaybackPosition(),
+				TotalDuration: m.AudioPlayer.GetTotalLength(),
 			}
 			libraryModel, _ = m.libraryModel.Update(positionMsg)
 			m.libraryModel = libraryModel.(*LibraryModel)
 		}
 
-		if err := m.audioPlayer.GetLastError(); err != nil && err != m.lastError {
+		if err := m.AudioPlayer.GetLastError(); err != nil && err != m.lastError {
 			cmds = append(cmds, func() tea.Msg {
 				return ErrorMsg{Error: err}
 			})
@@ -363,13 +366,13 @@ func (m *Model) handleSongSelection(msg SongSelectedMsg) (tea.Model, tea.Cmd) {
 	libraryModel, _ := m.libraryModel.Update(msg)
 	m.libraryModel = libraryModel.(*LibraryModel)
 
-	if m.selectedSong != nil && m.selectedSong.Path == msg.Song.Path {
+	if m.SelectedSong != nil && m.SelectedSong.Path == msg.Song.Path {
 		playerModel, playerCmd := m.playerModel.Update(msg)
 		m.playerModel = playerModel.(*PlayerModel)
 		return m, playerCmd
 	}
 
-	m.selectedSong = &msg.Song
+	m.SelectedSong = &msg.Song
 
 	rawDominantColor := m.albumArtRenderer.ExtractDominantColor(msg.Song)
 	m.dominantColor = Colors.AdjustColorForContrast(rawDominantColor)
@@ -401,23 +404,23 @@ func (m *Model) handleSongSelection(msg SongSelectedMsg) (tea.Model, tea.Cmd) {
 
 func (m *Model) loadAndPlaySong(song lib.Song) error {
 
-	if m.audioPlayer.IsPlaying() {
-		m.audioPlayer.Stop()
+	if m.AudioPlayer.IsPlaying() {
+		m.AudioPlayer.Stop()
 	}
 
 	if song.Path == "" {
 		return fmt.Errorf("invalid song path")
 	}
 
-	if err := m.audioPlayer.Load(song.Path); err != nil {
+	if err := m.AudioPlayer.Load(song.Path); err != nil {
 		return fmt.Errorf("failed to load song '%s': %w", song.Title, err)
 	}
 
-	if err := m.audioPlayer.Play(); err != nil {
+	if err := m.AudioPlayer.Play(); err != nil {
 		return fmt.Errorf("failed to play song '%s': %w", song.Title, err)
 	}
 
-	m.audioPlayer.ForceGC()
+	m.AudioPlayer.ForceGC()
 
 	return nil
 }
@@ -436,6 +439,85 @@ func (m *Model) View() string {
 		return m.downloaderModel.View()
 	default:
 		return "Unknown view"
+	}
+}
+
+func (m *Model) play() tea.Cmd {
+	if m.AudioPlayer.IsPlaying() {
+		return nil
+	}
+
+	err := m.AudioPlayer.Play()
+	if err != nil {
+		return func() tea.Msg {
+			return ErrorMsg{Error: err}
+		}
+	}
+
+	return func() tea.Msg {
+		return PlayPauseMsg{}
+	}
+}
+
+func (m *Model) pause() tea.Cmd {
+	if !m.AudioPlayer.IsPlaying() {
+		return nil
+	}
+
+	err := m.AudioPlayer.Pause()
+	if err != nil {
+		return func() tea.Msg {
+			return ErrorMsg{Error: err}
+		}
+	}
+
+	return func() tea.Msg {
+		return PlayPauseMsg{}
+	}
+}
+
+func (m *Model) playPause() tea.Cmd {
+	if m.AudioPlayer.IsPlaying() {
+		err := m.AudioPlayer.Pause()
+		if err != nil {
+			return func() tea.Msg {
+				return ErrorMsg{Error: err}
+			}
+		}
+	} else {
+		err := m.AudioPlayer.Play()
+		if err != nil {
+			return func() tea.Msg {
+				return ErrorMsg{Error: err}
+			}
+		}
+	}
+
+	m.playerModel.updatePlaybackStatus()
+
+	return func() tea.Msg {
+		return PlayPauseMsg{}
+	}
+}
+
+func (m *Model) stop() tea.Cmd {
+	if m.AudioPlayer.IsPlaying() {
+		err := m.AudioPlayer.Stop()
+		if err != nil {
+			return func() tea.Msg {
+				return ErrorMsg{Error: err}
+			}
+		}
+	}
+
+	m.playerModel.currentSong = nil
+	m.playerModel.isPlaying = false
+	m.playerModel.position = 0
+	m.playerModel.totalDuration = 0
+	m.playerModel.lastUpdate = time.Now()
+
+	return func() tea.Msg {
+		return StopMsg{}
 	}
 }
 
@@ -481,4 +563,61 @@ func (m *Model) playPreviousTrack() tea.Cmd {
 	return func() tea.Msg {
 		return SongSelectedMsg{Song: prevSong, KeepView: true}
 	}
+}
+
+const (
+	Play      = "play"
+	Pause     = "pause"
+	PlayPause = "playpause"
+	NextTrack = "next"
+	PrevTrack = "prev"
+	Stop      = "stop"
+)
+
+func (m *Model) ControlPlayback(action string) error {
+	if m.AudioPlayer == nil {
+		return fmt.Errorf("audio player not initialized")
+	}
+
+	switch action {
+	case Play:
+		cmd := m.play()
+		if cmd != nil {
+			msg := cmd()
+			_, _ = m.Update(msg)
+		}
+	case Pause:
+		cmd := m.pause()
+		if cmd != nil {
+			msg := cmd()
+			_, _ = m.Update(msg)
+		}
+	case PlayPause:
+		cmd := m.playPause()
+		if cmd != nil {
+			msg := cmd()
+			_, _ = m.Update(msg)
+		}
+	case Stop:
+		cmd := m.stop()
+		if cmd != nil {
+			msg := cmd()
+			_, _ = m.Update(msg)
+		}
+	case NextTrack:
+		cmd := m.playNextTrack()
+		if cmd != nil {
+			msg := cmd()
+			_, _ = m.Update(msg)
+		}
+	case PrevTrack:
+		cmd := m.playPreviousTrack()
+		if cmd != nil {
+			msg := cmd()
+			_, _ = m.Update(msg)
+		}
+	default:
+		return fmt.Errorf("unknown action: %s", action)
+	}
+	return nil
 }

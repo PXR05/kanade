@@ -9,6 +9,7 @@ import (
 
 	"kanade/audio"
 	"kanade/downloader"
+	"kanade/hotkey"
 	"kanade/library"
 	"kanade/tui"
 
@@ -104,6 +105,8 @@ func main() {
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
 	)
+
+	hotkey.InitMediaKeys(model)
 
 	log.Println("Starting TUI application")
 	finalModel, err := p.Run()
