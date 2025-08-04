@@ -103,7 +103,7 @@ func main() {
 	p := tea.NewProgram(
 		model,
 		tea.WithAltScreen(),
-		tea.WithMouseCellMotion(),
+		tea.WithMouseAllMotion(),
 	)
 
 	hotkey.InitMediaKeys(model)

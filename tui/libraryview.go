@@ -369,6 +369,16 @@ func (m *LibraryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		})
 
 	case tea.KeyMsg:
+		switch msg.String() {
+		case "esc":
+			m.searchMode = false
+			m.searchQuery = ""
+			m.filteredSongs = m.songs
+			m.rebuildDisplayItems()
+			m.cursor = 0
+			return m, nil
+		}
+
 		if m.searchMode {
 			switch msg.String() {
 			case "enter":
@@ -392,14 +402,6 @@ func (m *LibraryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		switch msg.String() {
-		case "esc":
-			m.searchMode = false
-			m.searchQuery = ""
-			m.filteredSongs = m.songs
-			m.rebuildDisplayItems()
-			m.cursor = 0
-			return m, nil
-
 		case "/":
 			m.searchMode = true
 			m.searchQuery = ""
@@ -627,7 +629,7 @@ func (m *LibraryModel) renderLibraryContent(currentStyles LibraryStyles, availab
 
 		emptyHeight := SafeMax(availableHeight-BorderAccountWidth, KernelSize, KernelSize)
 		topPadding := emptyHeight / DefaultPadding
-		for i := 0; i < topPadding; i++ {
+		for range topPadding {
 			libraryContent.WriteString("\n")
 		}
 
@@ -814,20 +816,6 @@ func (m *LibraryModel) View() string {
 		content.WriteString("\n")
 	}
 	content.WriteString("\n")
-
-	if len(m.displayItems) == 0 {
-		emptyContent := lipgloss.NewStyle().Padding(0, DefaultPadding)
-		if m.searchQuery != "" {
-			content.WriteString(emptyContent.Render(currentStyles.Normal.Render("No songs match your search")))
-			content.WriteString("\n")
-			content.WriteString(emptyContent.Render(currentStyles.Help.Render("Press Esc to clear search")))
-		} else {
-			content.WriteString(emptyContent.Render(currentStyles.Normal.Render("No songs found")))
-		}
-		content.WriteString("\n\n")
-		content.WriteString(emptyContent.Render(currentStyles.Help.Render("Press 'q' to quit")))
-		return content.String()
-	}
 
 	currentHeight := strings.Count(content.String(), "\n") + 1
 	availableHeight := m.height - currentHeight - HelpBottomReserve

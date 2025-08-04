@@ -223,22 +223,25 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-		case "alt+1":
+		case "alt+!":
 			return m, func() tea.Msg {
 				return SwitchViewMsg{View: LibraryView}
 			}
 
-		case "alt+2":
+		case "alt+@":
 			return m, func() tea.Msg {
 				return SwitchViewMsg{View: PlayerView}
 			}
 
-		case "alt+3":
+		case "alt+#":
 			return m, func() tea.Msg {
 				return SwitchViewMsg{View: DownloaderView}
 			}
+
 		case "p":
-			return m, m.playPause()
+			if !m.libraryModel.searchMode {
+				return m, m.playPause()
+			}
 		}
 
 	case ErrorMsg:

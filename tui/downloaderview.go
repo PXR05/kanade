@@ -267,7 +267,7 @@ func (m *DownloaderModel) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case "tab":
+	case "shift+tab":
 		if len(m.downloads) > 0 {
 			m.inputMode = false
 			m.focusMode = FocusList
@@ -295,7 +295,7 @@ func (m *DownloaderModel) handleListMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return SwitchViewMsg{View: LibraryView}
 		}
 
-	case "tab":
+	case "shift+tab":
 		m.inputMode = true
 		m.focusMode = FocusInput
 		return m, nil
@@ -633,7 +633,7 @@ func (m *DownloaderModel) renderHelpSection(currentStyles DownloaderStyles) stri
 			helpParts = []string{
 				"Enter submit YouTube URL",
 				"Esc clear/back",
-				"Tab switch to list",
+				"Shift+Tab switch to list",
 			}
 		} else {
 			helpParts = []string{
@@ -642,7 +642,7 @@ func (m *DownloaderModel) renderHelpSection(currentStyles DownloaderStyles) stri
 				"d delete",
 				"c clear completed",
 				"r retry",
-				"Tab switch to input",
+				"Shift+Tab switch to input",
 				"Esc back",
 			}
 		}
@@ -652,9 +652,9 @@ func (m *DownloaderModel) renderHelpSection(currentStyles DownloaderStyles) stri
 
 	var statusText string
 	if m.inputMode {
-		statusText = "Paste YouTube URL and press Enter • Tab to switch to list"
+		statusText = "Paste YouTube URL and press Enter • Shift+Tab to switch to list"
 	} else {
-		statusText = "Navigate with ↑/↓ • x to cancel/remove • Tab to switch to input"
+		statusText = "Navigate with ↑/↓ • x to cancel/remove • Shift+Tab to switch to input"
 	}
 	return helpStyle.Render(currentStyles.Help.Render(statusText))
 }
