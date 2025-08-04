@@ -6,16 +6,6 @@ Kanade is a lightweight, terminal-first music player designed for simplicity and
 
 ## Screenshots
 
-### Library View
-
-![Library](assets/library.png)
-
-> [!TIP]  
-> `/` to search.
-> `c` to jump to current song.
-> `g` to switch grouping mode.
-> `tab` to switch between library and player.
-
 ### Player View
 
 ![Player](assets/player.png)
@@ -26,6 +16,16 @@ Kanade is a lightweight, terminal-first music player designed for simplicity and
 > `shift + left` and `shift + right` to skip.
 > `up` and `down` to adjust volume.
 > `tab` to switch between player and previous view.
+
+### Library View
+
+![Library](assets/library.png)
+
+> [!TIP]  
+> `/` to search.
+> `c` to jump to current song.
+> `g` to switch grouping mode.
+> `tab` to switch between library and player.
 
 ## Features
 
