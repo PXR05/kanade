@@ -3,7 +3,6 @@ module kanade
 go 1.24.3
 
 require (
-	github.com/bogem/id3v2 v1.2.0
 	github.com/charmbracelet/bubbletea v1.3.6
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/dhowden/tag v0.0.0-20240417053706-3d75831295e8

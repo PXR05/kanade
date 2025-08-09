@@ -37,7 +37,7 @@ Kanade is a lightweight, terminal-first music player designed for simplicity and
 - **Album Art:** Displays album art directly in the terminal (if available).
 
 > [!IMPORTANT]
-> Kanade requires [ffmpeg](https://ffmpeg.org) installed on your system for video to audio conversion when downloading from YouTube.
+> Kanade requires [ffmpeg](https://ffmpeg.org) for video to audio conversion. It will be downloaded automatically if not found in your PATH.
 
 ## Dependencies
 
@@ -47,7 +47,7 @@ Kanade is built with these Go libraries:
 - [Lipgloss](https://github.com/charmbracelet/lipgloss) for styling.
 - [Beep](https://github.com/gopxl/beep) for audio playback.
 - [youtube/v2](https://github.com/kkdai/youtube) for downloading audio.
-- [id3v2](https://github.com/bogem/id3v2) and [tag](https://github.com/dhowden/tag) for metadata handling.
+- [tag](https://github.com/dhowden/tag) for reading metadata.
 
 ## Installation
 
@@ -60,14 +60,21 @@ Pre-built binaries for Windows, Linux, and macOS are available on the [Releases]
 3. Run the executable.
 
 > [!TIP]
-> Run `./kanade --help` for usage instructions.
+> Run `kanade --help` for usage instructions.
 
 ### 2. Using Go
 
-If you have Go installed, you can run Kanade directly without building a binary:
+If you have Go installed, you can run or install Kanade directly without building a binary:
 
 ```bash
+git clone https://github.com/PXR05/kanade.git
+cd kanade
 go run .
+
+# or install the application
+
+go install github.com/PXR05/kanade@latest
+kanade
 ```
 
 ### 3. Manual Build
@@ -75,13 +82,10 @@ go run .
 If you prefer to build from source:
 
 ```bash
-# Clone the repository
 git clone https://github.com/PXR05/kanade.git
 cd kanade
 
-# Build the application
 go build
 
-# Run the executable
 ./kanade
 ```

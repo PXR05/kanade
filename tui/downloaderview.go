@@ -217,9 +217,7 @@ func (m *DownloaderModel) updateDownloadProgress(update downloader.ProgressUpdat
 			m.downloads[i].Progress = update.Progress
 			m.downloads[i].Downloaded = update.Downloaded
 			m.downloads[i].Status = update.Status
-			if update.ErrorMsg != "" {
-				m.downloads[i].ErrorMsg = update.ErrorMsg
-			}
+			m.downloads[i].ErrorMsg = update.ErrorMsg
 			break
 		}
 	}

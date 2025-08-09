@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 
 	lib "kanade/library"
 	"kanade/tui"
@@ -21,8 +22,19 @@ const mprisPlayerInterface = "org.mpris.MediaPlayer2.Player"
 const mprisBaseInterface = "org.mpris.MediaPlayer2"
 
 type MediaPlayer struct {
-	model *tui.Model
-	props *prop.Properties
+	model       *tui.Model
+	props       *prop.Properties
+	lastTrackID string
+}
+
+type mprisRoot struct{ model *tui.Model }
+
+func (r *mprisRoot) Raise() *dbus.Error { return nil }
+
+func (r *mprisRoot) Quit() *dbus.Error {
+	log.Println("D-Bus: Quit called")
+	r.model.ControlPlayback(tui.Stop)
+	return nil
 }
 
 func (p *MediaPlayer) Next() *dbus.Error {
@@ -70,35 +82,66 @@ func (p *MediaPlayer) Update(song *lib.Song, isPlaying bool) {
 		return
 	}
 
-	status := "Paused"
-	if isPlaying {
-		status = "Playing"
+	status := "Stopped"
+	if song != nil {
+		if isPlaying {
+			status = "Playing"
+		} else {
+			status = "Paused"
+		}
 	}
 	p.setPlaybackStatus(status)
 
 	if song != nil {
-		metadata := p.createMetadata(song)
-		p.setMetadata(metadata)
+		metadata, trackID := p.createMetadata(song)
+		if trackID != p.lastTrackID {
+			p.lastTrackID = trackID
+			p.setMetadata(metadata)
+		}
+	}
+
+	if p.model != nil && p.model.AudioPlayer != nil {
+		pos := p.model.AudioPlayer.GetPlaybackPosition().Microseconds()
+		if err := p.props.Set(mprisPlayerInterface, "Position", dbus.MakeVariant(int64(pos))); err != nil {
+			log.Printf("D-Bus: failed updating Position: %v", err)
+		}
 	}
 }
 
 func (p *MediaPlayer) setMetadata(metadata map[string]dbus.Variant) {
-	p.props.Set(mprisPlayerInterface, "Metadata", dbus.MakeVariant(metadata))
+	if err := p.props.Set(mprisPlayerInterface, "Metadata", dbus.MakeVariant(metadata)); err != nil {
+		log.Printf("D-Bus: failed updating Metadata: %v", err)
+		return
+	}
 	log.Println("D-Bus: Metadata updated")
 }
 
 func (p *MediaPlayer) setPlaybackStatus(status string) {
-	p.props.Set(mprisPlayerInterface, "PlaybackStatus", dbus.MakeVariant(status))
+	if err := p.props.Set(mprisPlayerInterface, "PlaybackStatus", dbus.MakeVariant(status)); err != nil {
+		log.Printf("D-Bus: failed updating PlaybackStatus: %v", err)
+		return
+	}
 	log.Println("D-Bus: PlaybackStatus updated to", status)
 }
 
-func (p *MediaPlayer) createMetadata(song *lib.Song) map[string]dbus.Variant {
+func (p *MediaPlayer) createMetadata(song *lib.Song) (map[string]dbus.Variant, string) {
 	meta := make(map[string]dbus.Variant)
 
-	meta["mpris:trackid"] = dbus.MakeVariant(dbus.ObjectPath(song.Path))
+	sum := md5.Sum([]byte(song.Path))
+	trackID := fmt.Sprintf("/org/mpris/MediaPlayer2/kanade/track/%x", sum)
+	meta["mpris:trackid"] = dbus.MakeVariant(dbus.ObjectPath(trackID))
+
 	meta["xesam:title"] = dbus.MakeVariant(song.Title)
 	meta["xesam:album"] = dbus.MakeVariant(song.Album)
 	meta["xesam:artist"] = dbus.MakeVariant([]string{song.Artist})
+	meta["xesam:url"] = dbus.MakeVariant("file://" + song.Path)
+
+	if p.model != nil && p.model.AudioPlayer != nil {
+		lengthUS := p.model.AudioPlayer.GetTotalLength().Microseconds()
+		if lengthUS > 0 {
+			meta["mpris:length"] = dbus.MakeVariant(int64(lengthUS))
+		}
+	}
 
 	if song.Picture != nil && len(song.Picture.Data) > 0 {
 		hash := md5.Sum(song.Picture.Data)
@@ -113,7 +156,7 @@ func (p *MediaPlayer) createMetadata(song *lib.Song) map[string]dbus.Variant {
 		meta["mpris:artUrl"] = dbus.MakeVariant("file://" + artPath)
 	}
 
-	return meta
+	return meta, trackID
 }
 
 func InitMediaKeys(m *tui.Model) {
@@ -154,10 +197,12 @@ func InitMediaKeys(m *tui.Model) {
 				"CanControl":     {Value: true, Writable: false, Emit: prop.EmitTrue},
 				"PlaybackStatus": {Value: "Stopped", Writable: false, Emit: prop.EmitTrue},
 				"Metadata":       {Value: map[string]dbus.Variant{}, Writable: false, Emit: prop.EmitTrue},
+				"Position":       {Value: int64(0), Writable: false, Emit: prop.EmitTrue},
 			},
 			"org.mpris.MediaPlayer2": {
 				"CanQuit":             {Value: true, Writable: false, Emit: prop.EmitTrue},
 				"CanRaise":            {Value: false, Writable: false, Emit: prop.EmitTrue},
+				"HasTrackList":        {Value: false, Writable: false, Emit: prop.EmitTrue},
 				"Identity":            {Value: "Kanade", Writable: false, Emit: prop.EmitTrue},
 				"DesktopEntry":        {Value: "kanade", Writable: false, Emit: prop.EmitTrue},
 				"SupportedUriSchemes": {Value: []string{"file"}, Writable: false, Emit: prop.EmitTrue},
@@ -172,13 +217,23 @@ func InitMediaKeys(m *tui.Model) {
 		}
 		player.props = props
 
-		err = conn.Export(func() {
-			log.Println("D-Bus: Quit called")
-			m.ControlPlayback(tui.Stop)
-		}, mprisPath, "org.mpris.MediaPlayer2")
+		if err := conn.Export(&mprisRoot{model: m}, mprisPath, "org.mpris.MediaPlayer2"); err != nil {
+			log.Printf("Failed to export base interface: %v", err)
+			return
+		}
 
 		log.Println("Linux (D-Bus/MPRIS) media key handler started.")
 
-		select {}
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+
+		player.Update(m.SelectedSong, m.AudioPlayer != nil && m.AudioPlayer.IsPlaying())
+
+		for {
+			select {
+			case <-ticker.C:
+				player.Update(m.SelectedSong, m.AudioPlayer != nil && m.AudioPlayer.IsPlaying())
+			}
+		}
 	}()
 }

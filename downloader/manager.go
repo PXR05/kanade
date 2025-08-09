@@ -75,6 +75,10 @@ type DownloadManager struct {
 	wg           sync.WaitGroup
 	cancelMap    map[string]context.CancelFunc
 	cancelMapMu  sync.RWMutex
+	ffmpegReady bool
+	ffmpegPath  string
+	ffmpegDone  chan struct{}
+	ffmpegErr   error
 }
 
 func NewManager(library *lib.Library, downloadDir string, workers int) *DownloadManager {
@@ -93,14 +97,51 @@ func NewManager(library *lib.Library, downloadDir string, workers int) *Download
 		ctx:          ctx,
 		cancel:       cancel,
 		cancelMap:    make(map[string]context.CancelFunc),
+		ffmpegDone:   make(chan struct{}),
 	}
 }
 
 func (m *DownloadManager) Start() {
-	for i := 0; i < m.workers; i++ {
-		m.wg.Add(1)
-		go m.worker()
-	}
+	go func() {
+		setupID := fmt.Sprintf("ffmpeg_%d", time.Now().UnixNano())
+		setup := &DownloadItem{
+			ID:        setupID,
+			URL:       "",
+			Title:     "Setting up FFmpeg",
+			Filename:  "ffmpeg.zip",
+			Progress:  0,
+			Status:    InProgress,
+			StartTime: time.Now(),
+		}
+		m.mu.Lock()
+		m.items[setupID] = setup
+		m.order = append([]string{setupID}, m.order...)
+		m.mu.Unlock()
+
+		ctx, cancel := context.WithCancel(m.ctx)
+		m.cancelMapMu.Lock()
+		m.cancelMap[setupID] = cancel
+		m.cancelMapMu.Unlock()
+
+		path, err := m.ensureFFmpeg(ctx, setup)
+		if err != nil {
+			m.ffmpegErr = err
+			m.updateStatus(setupID, Failed, err.Error())
+		} else {
+			m.ffmpegPath = path
+			m.ffmpegReady = true
+			m.updateStatus(setupID, Completed, "")
+		}
+		close(m.ffmpegDone)
+	}()
+
+	go func() {
+		<-m.ffmpegDone
+		for i := 0; i < m.workers; i++ {
+			m.wg.Add(1)
+			go m.worker()
+		}
+	}()
 }
 
 func (m *DownloadManager) Stop() {
@@ -116,6 +157,10 @@ func (m *DownloadManager) AddDownload(url string) (string, error) {
 
 	if !isValidURL(url) {
 		return "", fmt.Errorf("invalid YouTube URL: %s", url)
+	}
+
+	if !m.ffmpegReady {
+		return "", fmt.Errorf("initializing FFmpeg, please wait")
 	}
 
 	id := fmt.Sprintf("yt_%d", time.Now().UnixNano())
@@ -288,7 +333,7 @@ func (m *DownloadManager) processDownload(item *DownloadItem) {
 		return
 	}
 
-	filePath, err := m.downloadWithRetry(downloadCtx, item)
+	filePath, err := m.downloadWithRetry(downloadCtx, item, m.ffmpegPath)
 	if err != nil {
 		select {
 		case <-downloadCtx.Done():
@@ -323,12 +368,12 @@ func (m *DownloadManager) processDownload(item *DownloadItem) {
 	}
 }
 
-func (m *DownloadManager) downloadWithRetry(ctx context.Context, item *DownloadItem) (string, error) {
+func (m *DownloadManager) downloadWithRetry(ctx context.Context, item *DownloadItem, ffmpegPath string) (string, error) {
 	maxRetries := 3
 	baseDelay := time.Second
 
 	for attempt := range maxRetries {
-		filePath, err := m.downloadVideo(ctx, item)
+		filePath, err := m.downloadVideo(ctx, item, ffmpegPath)
 		if err == nil {
 			return filePath, nil
 		}
@@ -349,7 +394,7 @@ func (m *DownloadManager) downloadWithRetry(ctx context.Context, item *DownloadI
 	return "", fmt.Errorf("max retries exceeded")
 }
 
-func (m *DownloadManager) downloadVideo(ctx context.Context, item *DownloadItem) (string, error) {
+func (m *DownloadManager) downloadVideo(ctx context.Context, item *DownloadItem, ffmpegPath string) (string, error) {
 	select {
 	case <-m.ctx.Done():
 		return "", fmt.Errorf("download cancelled")
@@ -486,7 +531,7 @@ func (m *DownloadManager) downloadVideo(ctx context.Context, item *DownloadItem)
 
 	m.updateStatus(item.ID, InProgress, "Converting to MP3")
 
-	err = m.convertToMP3(ctx, tempFilePath, finalFilePath)
+	err = m.convertToMP3(ctx, ffmpegPath, tempFilePath, finalFilePath, video, thumbnailPath)
 	if err != nil {
 		copyErr := m.copyFileAsMP3(tempFilePath, finalFilePath)
 		if copyErr != nil {
@@ -496,11 +541,6 @@ func (m *DownloadManager) downloadVideo(ctx context.Context, item *DownloadItem)
 			}
 			return "", fmt.Errorf("failed to convert to MP3 and fallback copy failed: convert error: %w, copy error: %v", err, copyErr)
 		}
-	}
-
-	err = m.embedMetadataWithWriter(finalFilePath, thumbnailPath, video)
-	if err != nil {
-		return "", fmt.Errorf("failed to embed metadata: %w", err)
 	}
 
 	os.Remove(tempFilePath)
@@ -611,19 +651,46 @@ func (m *DownloadManager) downloadThumbnail(video *youtube.Video, title string) 
 	return thumbnailPath, nil
 }
 
-func (m *DownloadManager) convertToMP3(ctx context.Context, inputPath, outputPath string) error {
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		return fmt.Errorf("ffmpeg not found in PATH")
-	}
+func (m *DownloadManager) convertToMP3(ctx context.Context, ffmpegPath, inputPath, outputPath string, video *youtube.Video, thumbnailPath string) error {
 
 	args := []string{"-y"}
 	args = append(args, "-i", inputPath)
+
+	hasCover := false
+	if thumbnailPath != "" {
+		if _, statErr := os.Stat(thumbnailPath); statErr == nil {
+			args = append(args, "-i", thumbnailPath)
+			hasCover = true
+		}
+	}
+
+	title := m.escapeMetadata(video.Title)
+	artist := m.escapeMetadata(video.Author)
+	album := title
+	year := m.escapeMetadata(video.PublishDate.Format("2006"))
+	genre := "Unknown"
+
+	if hasCover {
+		args = append(args, "-map", "0:a", "-map", "1:v")
+		args = append(args, "-disposition:v", "attached_pic")
+		args = append(args, "-metadata:s:v", "title=Album cover")
+		args = append(args, "-metadata:s:v", "comment=Cover (front)")
+	}
+
 	args = append(args, "-c:a", "libmp3lame")
 	args = append(args, "-b:a", "192k")
 	args = append(args, "-ar", "44100")
+
+	args = append(args, "-id3v2_version", "3")
+	args = append(args, "-metadata", "title="+title)
+	args = append(args, "-metadata", "artist="+artist)
+	args = append(args, "-metadata", "album="+album)
+	args = append(args, "-metadata", "date="+year)
+	args = append(args, "-metadata", "genre="+genre)
+
 	args = append(args, outputPath)
 
-	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+	cmd := exec.CommandContext(ctx, ffmpegPath, args...)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 
@@ -633,45 +700,6 @@ func (m *DownloadManager) convertToMP3(ctx context.Context, inputPath, outputPat
 	}
 
 	return nil
-}
-
-func (m *DownloadManager) embedMetadataWithWriter(filePath, thumbnailPath string, video *youtube.Video) error {
-	meta := metadata.Metadata{
-		Title:  video.Title,
-		Artist: video.Author,
-		Album:  video.Title,
-		Year:   video.PublishDate.Format("2006"),
-		Genre:  "Unknown",
-	}
-
-	if thumbnailPath != "" {
-		thumbnailData, err := os.ReadFile(thumbnailPath)
-		if err == nil {
-			ext := strings.ToLower(filepath.Ext(thumbnailPath))
-			var mimeType string
-			switch ext {
-			case ".jpg", ".jpeg":
-				mimeType = "image/jpeg"
-			case ".png":
-				mimeType = "image/png"
-			case ".gif":
-				mimeType = "image/gif"
-			case ".webp":
-				mimeType = "image/webp"
-			default:
-				mimeType = "image/jpeg"
-			}
-			meta.AlbumArt = metadata.Picture{
-				Ext:         ext,
-				MIMEType:    mimeType,
-				Type:        "Front cover",
-				Description: "Front cover",
-				Data:        thumbnailData,
-			}
-		}
-	}
-
-	return metadata.WriteMetadata(filePath, meta)
 }
 
 func (m *DownloadManager) copyFileAsMP3(srcPath, dstPath string) error {
