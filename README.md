@@ -69,11 +69,12 @@ If you have Go installed, you can run or install Kanade directly without buildin
 ```bash
 git clone https://github.com/PXR05/kanade.git
 cd kanade
+
+# run the application directly
 go run .
 
-# or install the application
-
-go install github.com/PXR05/kanade@latest
+# or install the application globally
+go install .
 kanade
 ```
 
