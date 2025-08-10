@@ -279,8 +279,17 @@ func (m *DownloaderModel) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	default:
-		if len(msg.String()) == 1 && msg.String() != "\t" {
-			m.inputValue += msg.String()
+		if msg.Type == tea.KeySpace {
+			m.inputValue += " "
+			return m, nil
+		}
+		if len(msg.Runes) > 0 {
+			for _, r := range msg.Runes {
+				if r == '\n' || r == '\r' || r == '\t' {
+					continue
+				}
+				m.inputValue += string(r)
+			}
 		}
 		return m, nil
 	}

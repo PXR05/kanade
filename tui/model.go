@@ -6,6 +6,7 @@ import (
 	"kanade/downloader"
 	lib "kanade/library"
 	"log"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -41,6 +42,8 @@ type Model struct {
 
 	lastError    error
 	errorTimeout time.Time
+
+	commandBar *CommandBar
 }
 
 type (
@@ -99,7 +102,8 @@ type (
 
 	PlayPauseMsg struct{}
 
-	StopMsg struct{}
+	StopMsg            struct{}
+	CommandExecutedMsg struct{}
 )
 
 func NewModel(library *lib.Library, audioPlayer *audio.Player, downloaderManager *downloader.DownloadManager) *Model {
@@ -123,6 +127,7 @@ func NewModel(library *lib.Library, audioPlayer *audio.Player, downloaderManager
 		downloaderModel:   downloaderModel,
 		dominantColor:     DefaultAccentColor,
 		albumArtRenderer:  NewAlbumArtRenderer(AlbumArtMinMax, AlbumArtMinMax),
+		commandBar:        NewCommandBar(),
 	}
 
 	audioPlayer.SetErrorCallback(func(err error) {
@@ -177,6 +182,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.albumArtRenderer = NewResponsiveAlbumArtRenderer(m.width, m.height)
 
+		if m.commandBar != nil {
+			m.commandBar.UpdateSize(m.width, m.height)
+		}
+
 		libraryModel, libraryCmd := m.libraryModel.Update(WindowSizeMsg{Width: msg.Width, Height: msg.Height})
 		m.libraryModel = libraryModel.(*LibraryModel)
 
@@ -189,6 +198,64 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, libraryCmd, playerCmd, downloaderCmd)
 
 	case tea.KeyMsg:
+		if m.commandBar != nil && m.commandBar.Active {
+			switch msg.String() {
+			case "enter":
+				if m.commandBar.Prompt == "/" && m.currentView == LibraryView {
+					m.commandBar.Active = false
+					m.commandBar.Reset()
+					return m, nil
+				}
+				input := strings.TrimSpace(m.commandBar.Input)
+				m.commandBar.Active = false
+				m.commandBar.Reset()
+				if input != "" {
+					cmd := m.executeCommand(input)
+					return m, cmd
+				}
+				return m, nil
+			case "esc":
+				if m.commandBar.Prompt == "/" && m.currentView == LibraryView {
+					m.libraryModel.searchQuery = ""
+					m.libraryModel.filterSongs()
+				}
+				m.commandBar.Active = false
+				m.commandBar.Reset()
+				return m, nil
+			case "backspace":
+				if len(m.commandBar.Input) > 0 {
+					m.commandBar.Input = m.commandBar.Input[:len(m.commandBar.Input)-1]
+				}
+				if m.commandBar.Prompt == "/" && m.currentView == LibraryView {
+					m.libraryModel.searchQuery = m.commandBar.Input
+					m.libraryModel.filterSongs()
+				}
+				return m, nil
+			default:
+				if msg.Type == tea.KeySpace {
+					m.commandBar.Input += " "
+					if m.commandBar.Prompt == "/" && m.currentView == LibraryView {
+						m.libraryModel.searchQuery = m.commandBar.Input
+						m.libraryModel.filterSongs()
+					}
+					return m, nil
+				}
+				if len(msg.Runes) > 0 {
+					for _, r := range msg.Runes {
+						if r == '\n' || r == '\r' || r == '\t' {
+							continue
+						}
+						m.commandBar.Input += string(r)
+					}
+					if m.commandBar.Prompt == "/" && m.currentView == LibraryView {
+						m.libraryModel.searchQuery = m.commandBar.Input
+						m.libraryModel.filterSongs()
+					}
+				}
+				return m, nil
+			}
+		}
+
 		switch msg.String() {
 		case "ctrl+c", "q":
 			if m.currentView == PlayerView {
@@ -196,16 +263,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-			if m.currentView == LibraryView && m.libraryModel.searchMode {
+			if m.currentView == DownloaderView && m.downloaderModel.inputMode {
 				break
 			}
-
-			if m.currentView == DownloaderView && m.downloaderModel.inputMode {
+			if m.commandBar != nil && m.commandBar.Active {
 				break
 			}
 			return m, tea.Quit
 
 		case "esc":
+			if m.commandBar != nil && m.commandBar.Active {
+				m.commandBar.Active = false
+				m.commandBar.Reset()
+				return m, nil
+			}
 			if m.currentView == PlayerView {
 				m.currentView = LibraryView
 				return m, nil
@@ -223,24 +294,25 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-		case "alt+!":
-			return m, func() tea.Msg {
-				return SwitchViewMsg{View: LibraryView}
-			}
-
-		case "alt+@":
-			return m, func() tea.Msg {
-				return SwitchViewMsg{View: PlayerView}
-			}
-
-		case "alt+#":
-			return m, func() tea.Msg {
-				return SwitchViewMsg{View: DownloaderView}
-			}
-
 		case "p":
-			if !m.libraryModel.searchMode {
-				return m, m.playPause()
+			return m, m.playPause()
+
+		case "/":
+			if m.currentView == LibraryView && m.commandBar != nil {
+				m.commandBar.Active = true
+				m.commandBar.Prompt = "/"
+				m.commandBar.Reset()
+				m.libraryModel.searchQuery = ""
+				m.libraryModel.filterSongs()
+				return m, nil
+			}
+
+		case ":":
+			if m.commandBar != nil {
+				m.commandBar.Active = true
+				m.commandBar.Prompt = ":"
+				m.commandBar.Reset()
+				return m, nil
 			}
 		}
 
@@ -433,16 +505,103 @@ func (m *Model) GetLastError() error {
 }
 
 func (m *Model) View() string {
+	var base string
 	switch m.currentView {
 	case LibraryView:
-		return m.libraryModel.View()
+		base = m.libraryModel.View()
 	case PlayerView:
-		return m.playerModel.View()
+		base = m.playerModel.View()
 	case DownloaderView:
-		return m.downloaderModel.View()
+		base = m.downloaderModel.View()
 	default:
-		return "Unknown view"
+		base = "Unknown view"
 	}
+
+	if m.commandBar != nil && m.commandBar.Active {
+		if !strings.HasSuffix(base, "\n") {
+			base += "\n"
+		}
+		base += m.commandBar.View()
+	}
+	return base
+}
+
+func (m *Model) executeCommand(input string) tea.Cmd {
+	if input == "" {
+		return nil
+	}
+	trimmed := strings.TrimSpace(input)
+
+	if strings.HasPrefix(trimmed, "/") {
+		query := strings.TrimSpace(trimmed[1:])
+		if query == "" {
+			return nil
+		}
+		m.currentView = LibraryView
+		m.libraryModel.searchQuery = query
+		m.libraryModel.filterSongs()
+		return nil
+	}
+
+	if !strings.Contains(trimmed, " ") && len(trimmed) >= 2 && (trimmed[0] == 'v' || trimmed[0] == 'V') {
+		second := strings.ToLower(string(trimmed[1]))
+		switch second {
+		case "l":
+			return func() tea.Msg { return SwitchViewMsg{View: LibraryView} }
+		case "p":
+			return func() tea.Msg { return SwitchViewMsg{View: PlayerView} }
+		case "d":
+			return func() tea.Msg { return SwitchViewMsg{View: DownloaderView} }
+		}
+	}
+
+	parts := strings.Fields(trimmed)
+	if len(parts) == 0 {
+		return nil
+	}
+	cmd := strings.ToLower(parts[0])
+
+	switch cmd {
+	case "q", "quit", "exit":
+		return tea.Quit
+
+	case "play":
+		return m.play()
+	case "pause":
+		return m.pause()
+	case "next":
+		return m.playNextTrack()
+	case "prev":
+		return m.playPreviousTrack()
+
+	case "stop":
+		return m.stop()
+
+	case "view":
+		if len(parts) < 2 {
+			return nil
+		}
+		switch strings.ToLower(parts[1]) {
+		case "lib", "library", "l":
+			return func() tea.Msg { return SwitchViewMsg{View: LibraryView} }
+		case "player", "p":
+			return func() tea.Msg { return SwitchViewMsg{View: PlayerView} }
+		case "dl", "downloader", "d":
+			return func() tea.Msg { return SwitchViewMsg{View: DownloaderView} }
+		}
+		return nil
+
+	case "search":
+		if len(parts) < 2 {
+			return nil
+		}
+		query := strings.Join(parts[1:], " ")
+		m.currentView = LibraryView
+		m.libraryModel.searchQuery = query
+		m.libraryModel.filterSongs()
+		return nil
+	}
+	return nil
 }
 
 func (m *Model) play() tea.Cmd {

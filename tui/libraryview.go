@@ -45,7 +45,6 @@ type LibraryModel struct {
 	currentSong   *lib.Song
 	isPlaying     bool
 	dominantColor string
-	searchMode    bool
 	searchQuery   string
 	position      time.Duration
 	totalDuration time.Duration
@@ -82,7 +81,6 @@ func NewLibraryModel(songs []lib.Song) *LibraryModel {
 		cursor:         0,
 		styles:         DefaultLibraryStyles(),
 		dominantColor:  DefaultAccentColor,
-		searchMode:     false,
 		searchQuery:    "",
 		groupingMode:   NoGrouping,
 		expandedGroups: make(map[string]bool),
@@ -370,42 +368,6 @@ func (m *LibraryModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "esc":
-			m.searchMode = false
-			m.searchQuery = ""
-			m.filteredSongs = m.songs
-			m.rebuildDisplayItems()
-			m.cursor = 0
-			return m, nil
-		}
-
-		if m.searchMode {
-			switch msg.String() {
-			case "enter":
-				m.searchMode = false
-				return m, nil
-
-			case "backspace":
-				if len(m.searchQuery) > 0 {
-					m.searchQuery = m.searchQuery[:len(m.searchQuery)-1]
-					m.filterSongs()
-				}
-				return m, nil
-
-			default:
-				if len(msg.String()) == 1 {
-					m.searchQuery += msg.String()
-					m.filterSongs()
-				}
-				return m, nil
-			}
-		}
-
-		switch msg.String() {
-		case "/":
-			m.searchMode = true
-			m.searchQuery = ""
-			return m, nil
 
 		case "enter":
 			if len(m.displayItems) > 0 && m.cursor < len(m.displayItems) {
@@ -801,26 +763,18 @@ func (m *LibraryModel) View() string {
 		return content.String()
 	}
 
-	if m.searchMode {
-		searchLine := fmt.Sprintf("%s%s", DefaultSearchPrompt, m.searchQuery)
-		content.WriteString(currentStyles.Title.Render(searchLine))
-	} else {
-		titleText := "Kanade"
-		content.WriteString(currentStyles.Title.Render(titleText))
-	}
+	titleText := "Kanade"
+	content.WriteString(currentStyles.Title.Render(titleText))
 	content.WriteString("\n")
-
-	if !m.searchMode && m.searchQuery != "" {
-		searchInfo := fmt.Sprintf("Filtered by: %s (Press / to search again, Esc to clear)", m.searchQuery)
-		content.WriteString(currentStyles.Help.Render(searchInfo))
-		content.WriteString("\n")
-	}
 	content.WriteString("\n")
 
 	currentHeight := strings.Count(content.String(), "\n") + 1
 	availableHeight := m.height - currentHeight - HelpBottomReserve
 
 	libraryTitle := fmt.Sprintf("Library (%d songs)", len(m.filteredSongs))
+	if m.searchQuery != "" {
+		libraryTitle = fmt.Sprintf("%s • %s", libraryTitle, m.searchQuery)
+	}
 	titleStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(DefaultTextColor)).
 		Bold(true).
@@ -845,7 +799,7 @@ func (m *LibraryModel) View() string {
 
 	var bottomLine string
 
-	helpStyle := lipgloss.NewStyle().Padding(0, MinimumPadding)
+	helpStyle := lipgloss.NewStyle().Padding(0, MinimumPadding).Width(m.width)
 
 	var leftContent string
 	if m.currentSong != nil {
@@ -875,6 +829,7 @@ func (m *LibraryModel) View() string {
 	bottomLine = helpStyle.Render(currentStyles.Help.Render(spacedContent))
 
 	content.WriteString(bottomLine)
+	content.WriteString("\n")
 
 	return content.String()
 }

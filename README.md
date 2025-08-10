@@ -11,6 +11,7 @@ Kanade is a lightweight, terminal-first music player designed for simplicity and
 ![Player](assets/player.png)
 
 > [!TIP]  
+> `:` to enter command mode.
 > `space` to play/pause.
 > `left` and `right` to seek.
 > `shift + left` and `shift + right` to skip.
@@ -23,6 +24,7 @@ Kanade is a lightweight, terminal-first music player designed for simplicity and
 
 > [!TIP]  
 > `/` to search.
+> `:` to enter command mode.
 > `c` to jump to current song.
 > `g` to switch grouping mode.
 > `tab` to switch between library and player.
