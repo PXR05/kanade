@@ -214,9 +214,21 @@ func (m *DownloaderModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *DownloaderModel) updateDownloadProgress(update downloader.ProgressUpdate) {
 	for i, download := range m.downloads {
 		if download.ID == update.ID {
-			m.downloads[i].Progress = update.Progress
-			m.downloads[i].Downloaded = update.Downloaded
-			m.downloads[i].Status = update.Status
+			if update.Progress > m.downloads[i].Progress {
+				m.downloads[i].Progress = update.Progress
+			}
+			if update.Downloaded > m.downloads[i].Downloaded {
+				m.downloads[i].Downloaded = update.Downloaded
+			}
+
+			if update.Status >= m.downloads[i].Status {
+				m.downloads[i].Status = update.Status
+			}
+
+			if m.downloads[i].Status == downloader.Completed && m.downloads[i].Progress < 1.0 {
+				m.downloads[i].Progress = 1.0
+			}
+
 			m.downloads[i].ErrorMsg = update.ErrorMsg
 			break
 		}
@@ -232,7 +244,26 @@ func (m *DownloaderModel) handleDownloadCompletion(event downloader.CompletionEv
 
 func (m *DownloaderModel) refreshDownloads() {
 	if m.downloaderManager != nil {
-		m.downloads = m.downloaderManager.GetDownloads()
+		newDownloads := m.downloaderManager.GetDownloads()
+
+		if len(m.downloads) > 0 && len(newDownloads) > 0 {
+			existing := make(map[string]*downloader.DownloadItem, len(m.downloads))
+			for _, it := range m.downloads {
+				existing[it.ID] = it
+			}
+			for i, nd := range newDownloads {
+				if od, ok := existing[nd.ID]; ok {
+					if od.Progress > nd.Progress {
+						newDownloads[i].Progress = od.Progress
+					}
+					if od.Downloaded > nd.Downloaded {
+						newDownloads[i].Downloaded = od.Downloaded
+					}
+				}
+			}
+		}
+
+		m.downloads = newDownloads
 		if m.cursor >= len(m.downloads) && len(m.downloads) > 0 {
 			m.cursor = len(m.downloads) - 1
 		}

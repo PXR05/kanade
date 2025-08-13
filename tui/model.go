@@ -256,6 +256,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+		if m.currentView == DownloaderView && m.downloaderModel != nil && m.downloaderModel.inputMode {
+			downloaderModel, cmd := m.downloaderModel.Update(msg)
+			m.downloaderModel = downloaderModel.(*DownloaderModel)
+			return m, cmd
+		}
+
 		switch msg.String() {
 		case "ctrl+c", "q":
 			if m.currentView == PlayerView {

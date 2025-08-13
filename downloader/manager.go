@@ -75,10 +75,10 @@ type DownloadManager struct {
 	wg           sync.WaitGroup
 	cancelMap    map[string]context.CancelFunc
 	cancelMapMu  sync.RWMutex
-	ffmpegReady bool
-	ffmpegPath  string
-	ffmpegDone  chan struct{}
-	ffmpegErr   error
+	ffmpegReady  bool
+	ffmpegPath   string
+	ffmpegDone   chan struct{}
+	ffmpegErr    error
 }
 
 func NewManager(library *lib.Library, downloadDir string, workers int) *DownloadManager {
@@ -353,7 +353,15 @@ func (m *DownloadManager) processDownload(item *DownloadItem) {
 
 	m.library.AddSong(*song)
 
+	m.mu.Lock()
 	item.CompletedAt = time.Now()
+	if item.Size > 0 {
+		item.Downloaded = item.Size
+		item.Progress = 1.0
+	} else if item.Progress < 1.0 {
+		item.Progress = 1.0
+	}
+	m.mu.Unlock()
 	m.updateStatus(item.ID, Completed, "")
 
 	select {
@@ -417,7 +425,9 @@ func (m *DownloadManager) downloadVideo(ctx context.Context, item *DownloadItem,
 		video = fallbackVideo
 	}
 
+	m.mu.Lock()
 	item.Title = sanitizeFilename(video.Title)
+	m.mu.Unlock()
 
 	audioFormats := video.Formats.WithAudioChannels().Type("audio")
 	if len(audioFormats) == 0 {
@@ -515,7 +525,9 @@ func (m *DownloadManager) downloadVideo(ctx context.Context, item *DownloadItem,
 	}
 	defer tempFile.Close()
 
+	m.mu.Lock()
 	item.Size = size
+	m.mu.Unlock()
 
 	err = m.copyWithProgress(ctx, item, stream, tempFile)
 	if err != nil {
@@ -548,7 +560,9 @@ func (m *DownloadManager) downloadVideo(ctx context.Context, item *DownloadItem,
 		os.Remove(thumbnailPath)
 	}
 
+	m.mu.Lock()
 	item.Filename = finalFilename
+	m.mu.Unlock()
 	return finalFilePath, nil
 }
 
@@ -777,11 +791,15 @@ func (m *DownloadManager) extractMetadataAndCreateSong(filePath string) (*lib.So
 func (m *DownloadManager) updateStatus(id string, status Status, errorMsg string) {
 	m.mu.Lock()
 	item, exists := m.items[id]
+	var progress float64
+	var downloaded int64
 	if exists {
 		item.Status = status
 		if errorMsg != "" {
 			item.ErrorMsg = errorMsg
 		}
+		progress = item.Progress
+		downloaded = item.Downloaded
 	}
 	m.mu.Unlock()
 
@@ -789,8 +807,8 @@ func (m *DownloadManager) updateStatus(id string, status Status, errorMsg string
 		select {
 		case m.progressChan <- ProgressUpdate{
 			ID:         id,
-			Progress:   item.Progress,
-			Downloaded: item.Downloaded,
+			Progress:   progress,
+			Downloaded: downloaded,
 			Status:     status,
 			ErrorMsg:   errorMsg,
 		}:
@@ -840,15 +858,21 @@ func (m *DownloadManager) copyWithProgress(ctx context.Context, item *DownloadIt
 				return fmt.Errorf("short write")
 			}
 
+			var progress float64
+			m.mu.Lock()
 			item.Downloaded = written
 			if item.Size > 0 {
-				item.Progress = float64(written) / float64(item.Size)
+				progress = float64(written) / float64(item.Size)
+				item.Progress = progress
+			} else {
+				progress = item.Progress
 			}
+			m.mu.Unlock()
 
 			select {
 			case m.progressChan <- ProgressUpdate{
 				ID:         item.ID,
-				Progress:   item.Progress,
+				Progress:   progress,
 				Downloaded: written,
 				Status:     InProgress,
 			}:
