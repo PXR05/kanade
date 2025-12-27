@@ -146,8 +146,7 @@ func ValidateFile(filePath string) error {
 
 	ext := strings.ToLower(filepath.Ext(filePath))
 	switch ext {
-	case ".mp3", ".wav":
-
+	case ".mp3", ".wav", ".flac", ".ogg":
 		break
 	default:
 		return fmt.Errorf("unsupported file format: %s", ext)
@@ -158,7 +157,7 @@ func ValidateFile(filePath string) error {
 
 func isSupportedAudioFile(filename string) bool {
 	ext := strings.ToLower(filepath.Ext(filename))
-	return ext == ".mp3" || ext == ".wav"
+	return ext == ".mp3" || ext == ".wav" || ext == ".flac" || ext == ".ogg"
 }
 
 func (l *Library) ReadDir(dir string) ([]Song, error) {

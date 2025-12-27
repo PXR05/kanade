@@ -10,8 +10,10 @@ import (
 
 	"github.com/gopxl/beep/v2"
 	"github.com/gopxl/beep/v2/effects"
+	"github.com/gopxl/beep/v2/flac"
 	"github.com/gopxl/beep/v2/mp3"
 	"github.com/gopxl/beep/v2/speaker"
+	"github.com/gopxl/beep/v2/vorbis"
 	"github.com/gopxl/beep/v2/wav"
 )
 
@@ -173,6 +175,16 @@ func (p *Player) Load(filePath string) error {
 		streamer, format, err = wav.Decode(file)
 		if err != nil {
 			return fmt.Errorf("failed to decode WAV: %w", err)
+		}
+	case ".flac":
+		streamer, format, err = flac.Decode(file)
+		if err != nil {
+			return fmt.Errorf("failed to decode FLAC: %w", err)
+		}
+	case ".ogg":
+		streamer, format, err = vorbis.Decode(file)
+		if err != nil {
+			return fmt.Errorf("failed to decode OGG: %w", err)
 		}
 	default:
 		return fmt.Errorf("unsupported file format: %s", ext)
