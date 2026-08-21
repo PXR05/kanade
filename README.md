@@ -1,8 +1,8 @@
 # Kanade
 
-A simple, terminal-based music player written in Go.
+A minimal, terminal-based music player written in Go.
 
-Kanade is a lightweight, terminal-first music player designed for simplicity and ease of use. It allows you to manage your local music library, download new songs, and play your music without leaving the terminal.
+Kanade is a lightweight, terminal-first music player designed for simplicity and ease of use. Point it at a folder of audio files and play your music without leaving the terminal.
 
 ## Screenshots
 
@@ -10,46 +10,51 @@ Kanade is a lightweight, terminal-first music player designed for simplicity and
 
 ![Player](assets/player.png)
 
-> [!TIP]  
-> `:` to enter command mode.
-> `space` to play/pause.
-> `left` and `right` to seek.
-> `shift + left` and `shift + right` to skip.
-> `up` and `down` to adjust volume.
-> `tab` to switch between player and previous view.
-
 ### Library View
 
 ![Library](assets/library.png)
 
-> [!TIP]  
-> `/` to search.
-> `:` to enter command mode.
-> `c` to jump to current song.
-> `g` to switch grouping mode.
-> `tab` to switch between library and player.
-
 ## Features
 
 - **Minimalist TUI:** A clean and intuitive terminal user interface.
-- **Music Library:** Browse and manage your music collection.
-- **Downloader:** Download audio from YouTube videos directly into your library.
-- **Audio Playback:** Play, pause, and seek through your tracks.
-- **Metadata Support:** Reads ID3v2 tags to display song information.
-- **Album Art:** Displays album art directly in the terminal (if available).
+- **Music Library:** Browse your collection flat or grouped by album/artist.
+- **Audio Playback:** Play, pause, seek, shuffle, and repeat (off / all / one).
+- **Search:** Instant filtering as you type.
+- **Mouse Support:** Click songs to play, scroll lists, click the progress bar to seek.
+- **Metadata Support:** Reads ID3/Vorbis tags to display song information.
+- **Album Art:** Renders album art directly in the terminal with an adaptive accent color.
+- **Media Keys:** System play/pause/next/previous keys work on Windows, macOS, and Linux (MPRIS).
 
-> [!IMPORTANT]
-> Kanade requires [ffmpeg](https://ffmpeg.org) for video to audio conversion. It will be downloaded automatically if not found in your PATH.
+## Supported Formats
 
-## Dependencies
+`.mp3` `.wav` `.flac` `.ogg`
 
-Kanade is built with these Go libraries:
+## Keybindings
 
-- [Bubble Tea](https://github.com/charmbracelet/bubbletea) for the TUI.
-- [Lipgloss](https://github.com/charmbracelet/lipgloss) for styling.
-- [Beep](https://github.com/gopxl/beep) for audio playback.
-- [youtube/v2](https://github.com/kkdai/youtube) for downloading audio.
-- [tag](https://github.com/dhowden/tag) for reading metadata.
+Press `?` at any time for the full reference.
+
+| Key | Action |
+| --- | --- |
+| `q` / `ctrl+c` | Quit |
+| `?` | Help overlay |
+| `tab` | Switch player / last view |
+| `p` or `space` | Play / pause |
+| `+` / `-` | Volume up / down |
+| `m` | Mute |
+| `r` | Repeat mode: off → all → one |
+| `z` | Shuffle on/off |
+| `/` | Search (library) |
+| `:` | Command mode |
+| `enter` | Play song / expand group |
+| `g` | Cycle grouping: none → album → artist |
+| `c` | Jump to current song |
+| `R` | Rescan library folder |
+| `←` / `→` | Seek ±10s (player) |
+| `shift+←` / `shift+→` | Previous / next track |
+
+### Commands
+
+`:play` `:pause` `:stop` `:next` `:prev` `:vol <0-100>` `:mute` `:shuffle [on\|off]` `:repeat [off\|all\|one]` `:search <query>` `:vl` `:vp` `:reload` `:q`
 
 ## Installation
 
@@ -59,36 +64,48 @@ Pre-built binaries for Windows, Linux, and macOS are available on the [Releases]
 
 1. Go to the [Releases](https://github.com/PXR05/kanade/releases) section.
 2. Download the appropriate binary for your operating system.
-3. Run the executable.
+3. Run it, passing your music folder (or run inside it):
+
+```bash
+kanade ~/Music
+```
 
 > [!TIP]
 > Run `kanade --help` for usage instructions.
 
 ### 2. Using Go
 
-If you have Go installed, you can run or install Kanade directly without building a binary:
+If you have Go installed, you can run or install Kanade directly:
 
 ```bash
 git clone https://github.com/PXR05/kanade.git
 cd kanade
 
 # run the application directly
-go run .
+go run . ~/Music
 
 # or install the application globally
 go install .
-kanade
+kanade ~/Music
 ```
 
 ### 3. Manual Build
 
-If you prefer to build from source:
-
 ```bash
 git clone https://github.com/PXR05/kanade.git
 cd kanade
-
 go build
-
-./kanade
+./kanade ~/Music
 ```
+
+> [!NOTE]
+> Building for Linux requires ALSA development headers (`libasound2-dev`) since playback uses cgo there.
+
+## Dependencies
+
+Kanade is built with these Go libraries:
+
+- [Bubble Tea](https://github.com/charmbracelet/bubbletea) for the TUI.
+- [Lipgloss](https://github.com/charmbracelet/lipgloss) for styling.
+- [Beep](https://github.com/gopxl/beep) for audio playback.
+- [tag](https://github.com/dhowden/tag) for reading metadata.

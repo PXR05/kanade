@@ -33,8 +33,8 @@ func CalculateOptimalSize(terminalWidth, terminalHeight int) (width, height int)
 	availableWidth := terminalWidth - DefaultPadding*5
 	availableHeight := terminalHeight - DefaultPadding*10
 
-	availableWidth = SafeMax(availableWidth, ContentMinWidth, ContentMinWidth)
-	availableHeight = SafeMax(availableHeight, ContentMinHeight, ContentMinHeight)
+	availableWidth = max(availableWidth, ContentMinWidth)
+	availableHeight = max(availableHeight, ContentMinHeight)
 
 	var artSize int
 

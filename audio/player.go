@@ -2,8 +2,11 @@ package audio
 
 import (
 	"fmt"
+	"math"
 	"os"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -52,9 +55,11 @@ type Player struct {
 	cachedPosition     time.Duration
 }
 
+const DefaultVolume = 0.8
+
 func NewPlayer() *Player {
 	return &Player{
-		volumeLevel:  0.5,
+		volumeLevel:  DefaultVolume,
 		playbackDone: make(chan struct{}, 1),
 		loadThrottle: 50 * time.Millisecond,
 	}
@@ -163,7 +168,7 @@ func (p *Player) Load(filePath string) error {
 
 	var streamer beep.StreamSeekCloser
 	var format beep.Format
-	ext := getFileExtension(filePath)
+	ext := strings.ToLower(filepath.Ext(filePath))
 
 	switch ext {
 	case ".mp3":
@@ -483,7 +488,7 @@ func (p *Player) IsAtEnd() bool {
 	return currentPos >= p.totalLength-time.Millisecond*100
 }
 
-func (p *Player) HasPlaybackFinished() bool {
+func (p *Player) ConsumePlaybackFinished() bool {
 	select {
 	case <-p.playbackDone:
 		return true
@@ -550,6 +555,24 @@ func (p *Player) SetVolume(volume float64) error {
 	return p.setVolumeUnsafe(volume)
 }
 
+func (p *Player) GetVolume() float64 {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	return p.volumeLevel
+}
+
+const minVolumeDB = -60.0
+
+func volumeToBeepVolume(level float64) float64 {
+	if level >= 1 {
+		return 0
+	}
+
+	dbToBase2 := 20 * math.Log10(2)
+	return minVolumeDB * (1 - level) / dbToBase2
+}
+
 func (p *Player) setVolumeUnsafe(volume float64) error {
 	if volume < 0 || volume > 1 {
 		return fmt.Errorf("volume must be between 0.0 and 1.0, got: %f", volume)
@@ -565,7 +588,7 @@ func (p *Player) setVolumeUnsafe(volume float64) error {
 		p.volume.Silent = true
 	} else {
 		p.volume.Silent = false
-		p.volume.Volume = volume - 1
+		p.volume.Volume = volumeToBeepVolume(volume)
 	}
 
 	return nil
@@ -615,7 +638,6 @@ func (p *Player) Close() error {
 
 func (p *Player) ForceGC() {
 	runtime.GC()
-	runtime.GC()
 }
 
 func (p *Player) DeepCleanup() {
@@ -634,16 +656,4 @@ func (p *Player) DeepCleanup() {
 
 	p.trackLoadCount = 0
 	p.lastDeepClean = time.Now()
-}
-
-func getFileExtension(filePath string) string {
-	for i := len(filePath) - 1; i >= 0; i-- {
-		if filePath[i] == '.' {
-			return filePath[i:]
-		}
-		if filePath[i] == '/' || filePath[i] == '\\' {
-			break
-		}
-	}
-	return ""
 }

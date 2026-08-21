@@ -1,23 +1,14 @@
 package tui
 
 import (
-	"fmt"
-	"kanade/audio"
-	"kanade/downloader"
-	lib "kanade/library"
 	"log"
 	"strings"
 	"time"
 
+	"kanade/audio"
+	lib "kanade/library"
+
 	tea "github.com/charmbracelet/bubbletea"
-)
-
-type ViewState int
-
-const (
-	LibraryView ViewState = iota
-	PlayerView
-	DownloaderView
 )
 
 type Model struct {
@@ -26,108 +17,60 @@ type Model struct {
 	width        int
 	height       int
 
-	libraryModel    *LibraryModel
-	playerModel     *PlayerModel
-	downloaderModel *DownloaderModel
+	libraryModel *LibraryModel
+	playerModel  *PlayerModel
 
-	library           *lib.Library
-	AudioPlayer       *audio.Player
-	downloaderManager *downloader.DownloadManager
-	songs             []lib.Song
-	currentSongIndex  int
+	library     *lib.Library
+	AudioPlayer *audio.Player
+	libraryDir  string
 
+	currentSongIndex int
 	SelectedSong     *lib.Song
+
 	dominantColor    string
+	coloredSongPath  string
 	albumArtRenderer *AlbumArtRenderer
 
-	lastError    error
-	errorTimeout time.Time
-
 	commandBar *CommandBar
+
+	repeatMode RepeatMode
+	shuffle    bool
+
+	volume     float64
+	muted      bool
+	preMuteVol float64
+
+	statusText    string
+	statusIsError bool
+	statusExpiry  time.Time
+
+	helpOpen bool
+
+	sendFn func(tea.Msg)
+
+	finishHandled bool
+
+	lastError error
 }
 
-type (
-	SongSelectedMsg struct {
-		Song     lib.Song
-		KeepView bool
-	}
-
-	NextTrackMsg    struct{}
-	PrevTrackMsg    struct{}
-	SongFinishedMsg struct{}
-
-	SwitchViewMsg struct {
-		View ViewState
-	}
-
-	PlaybackStatusMsg struct {
-		IsPlaying bool
-		Position  string
-		Error     error
-	}
-
-	PlaybackPositionMsg struct {
-		Position      time.Duration
-		TotalDuration time.Duration
-	}
-
-	WindowSizeMsg struct {
-		Width, Height int
-	}
-
-	TickMsg struct {
-		Time time.Time
-	}
-
-	ErrorMsg struct {
-		Error error
-	}
-
-	DownloadProgressMsg struct {
-		Update downloader.ProgressUpdate
-	}
-
-	DownloadCompletedMsg struct {
-		Event downloader.CompletionEvent
-	}
-
-	DownloadAddedMsg struct {
-		ID  string
-		URL string
-	}
-
-	DominantColorMsg struct {
-		Color string
-	}
-
-	PlayPauseMsg struct{}
-
-	StopMsg            struct{}
-	CommandExecutedMsg struct{}
-)
-
-func NewModel(library *lib.Library, audioPlayer *audio.Player, downloaderManager *downloader.DownloadManager) *Model {
+func NewModel(library *lib.Library, audioPlayer *audio.Player, dir string) *Model {
 	songs := library.ListSongs()
 
-	libraryModel := NewLibraryModel(songs)
-	playerModel := NewPlayerModel(audioPlayer)
-	downloaderModel := NewDownloaderModel()
-	downloaderModel.SetDownloaderManager(downloaderManager)
-
 	model := &Model{
-		previousView:      LibraryView,
-		currentView:       LibraryView,
-		library:           library,
-		AudioPlayer:       audioPlayer,
-		downloaderManager: downloaderManager,
-		songs:             songs,
-		currentSongIndex:  -1,
-		libraryModel:      libraryModel,
-		playerModel:       playerModel,
-		downloaderModel:   downloaderModel,
-		dominantColor:     DefaultAccentColor,
-		albumArtRenderer:  NewAlbumArtRenderer(AlbumArtMinMax, AlbumArtMinMax),
-		commandBar:        NewCommandBar(),
+		previousView:     LibraryView,
+		currentView:      LibraryView,
+		library:          library,
+		AudioPlayer:      audioPlayer,
+		libraryDir:       dir,
+		currentSongIndex: -1,
+		libraryModel:     NewLibraryModel(songs),
+		playerModel:      NewPlayerModel(audioPlayer),
+		dominantColor:    DefaultAccentColor,
+		albumArtRenderer: NewAlbumArtRenderer(AlbumArtMinMax, AlbumArtMinMax),
+		commandBar:       NewCommandBar(),
+		repeatMode:       RepeatOff,
+		volume:           audioPlayer.GetVolume(),
+		preMuteVol:       audio.DefaultVolume,
 	}
 
 	audioPlayer.SetErrorCallback(func(err error) {
@@ -137,393 +80,352 @@ func NewModel(library *lib.Library, audioPlayer *audio.Player, downloaderManager
 	return model
 }
 
+func (m *Model) SetProgram(p func(tea.Msg)) {
+	m.sendFn = p
+}
+
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(
-		m.libraryModel.Init(),
-		m.playerModel.Init(),
-		m.downloaderModel.Init(),
-		m.listenForDownloadProgress(),
-		m.listenForDownloadCompletion(),
-	)
+	return m.scheduleTick()
 }
 
-func (m *Model) listenForDownloadProgress() tea.Cmd {
-	return tea.Tick(time.Millisecond*100, func(t time.Time) tea.Msg {
-		select {
-		case update := <-m.downloaderManager.GetProgressChannel():
-			return DownloadProgressMsg{Update: update}
-		default:
-			return tea.Tick(time.Millisecond*100, func(t time.Time) tea.Msg {
-				return m.listenForDownloadProgress()()
-			})()
-		}
-	})
-}
-
-func (m *Model) listenForDownloadCompletion() tea.Cmd {
-	return tea.Tick(time.Millisecond*100, func(t time.Time) tea.Msg {
-		select {
-		case event := <-m.downloaderManager.GetCompletionChannel():
-			return DownloadCompletedMsg{Event: event}
-		default:
-			return tea.Tick(time.Millisecond*100, func(t time.Time) tea.Msg {
-				return m.listenForDownloadCompletion()()
-			})()
-		}
+func (m *Model) scheduleTick() tea.Cmd {
+	return tea.Tick(TickInterval, func(t time.Time) tea.Msg {
+		return TickMsg{Time: t}
 	})
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmds []tea.Cmd
-
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-		m.albumArtRenderer = NewResponsiveAlbumArtRenderer(m.width, m.height)
-
-		if m.commandBar != nil {
-			m.commandBar.UpdateSize(m.width, m.height)
-		}
-
-		libraryModel, libraryCmd := m.libraryModel.Update(WindowSizeMsg{Width: msg.Width, Height: msg.Height})
-		m.libraryModel = libraryModel.(*LibraryModel)
-
-		playerModel, playerCmd := m.playerModel.Update(WindowSizeMsg{Width: msg.Width, Height: msg.Height})
-		m.playerModel = playerModel.(*PlayerModel)
-
-		downloaderModel, downloaderCmd := m.downloaderModel.Update(WindowSizeMsg{Width: msg.Width, Height: msg.Height})
-		m.downloaderModel = downloaderModel.(*DownloaderModel)
-
-		cmds = append(cmds, libraryCmd, playerCmd, downloaderCmd)
+		return m.handleResize(msg)
 
 	case tea.KeyMsg:
-		if m.commandBar != nil && m.commandBar.Active {
-			switch msg.String() {
-			case "enter":
-				if m.commandBar.Prompt == "/" && m.currentView == LibraryView {
-					m.commandBar.Active = false
-					m.commandBar.Reset()
-					return m, nil
-				}
-				input := strings.TrimSpace(m.commandBar.Input)
-				m.commandBar.Active = false
-				m.commandBar.Reset()
-				if input != "" {
-					cmd := m.executeCommand(input)
-					return m, cmd
-				}
-				return m, nil
-			case "esc":
-				if m.commandBar.Prompt == "/" && m.currentView == LibraryView {
-					m.libraryModel.searchQuery = ""
-					m.libraryModel.filterSongs()
-				}
-				m.commandBar.Active = false
-				m.commandBar.Reset()
-				return m, nil
-			case "backspace":
-				if len(m.commandBar.Input) > 0 {
-					m.commandBar.Input = m.commandBar.Input[:len(m.commandBar.Input)-1]
-				}
-				if m.commandBar.Prompt == "/" && m.currentView == LibraryView {
-					m.libraryModel.searchQuery = m.commandBar.Input
-					m.libraryModel.filterSongs()
-				}
-				return m, nil
-			default:
-				if msg.Type == tea.KeySpace {
-					m.commandBar.Input += " "
-					if m.commandBar.Prompt == "/" && m.currentView == LibraryView {
-						m.libraryModel.searchQuery = m.commandBar.Input
-						m.libraryModel.filterSongs()
-					}
-					return m, nil
-				}
-				if len(msg.Runes) > 0 {
-					for _, r := range msg.Runes {
-						if r == '\n' || r == '\r' || r == '\t' {
-							continue
-						}
-						m.commandBar.Input += string(r)
-					}
-					if m.commandBar.Prompt == "/" && m.currentView == LibraryView {
-						m.libraryModel.searchQuery = m.commandBar.Input
-						m.libraryModel.filterSongs()
-					}
-				}
-				return m, nil
-			}
-		}
+		return m.handleKey(msg)
 
-		if m.currentView == DownloaderView && m.downloaderModel != nil && m.downloaderModel.inputMode {
-			downloaderModel, cmd := m.downloaderModel.Update(msg)
-			m.downloaderModel = downloaderModel.(*DownloaderModel)
-			return m, cmd
-		}
+	case tea.MouseMsg:
+		return m.handleMouse(msg)
 
-		switch msg.String() {
-		case "ctrl+c", "q":
-			if m.currentView == PlayerView {
-				m.currentView = LibraryView
-				return m, nil
-			}
-
-			if m.currentView == DownloaderView && m.downloaderModel.inputMode {
-				break
-			}
-			if m.commandBar != nil && m.commandBar.Active {
-				break
-			}
-			return m, tea.Quit
-
-		case "esc":
-			if m.commandBar != nil && m.commandBar.Active {
-				m.commandBar.Active = false
-				m.commandBar.Reset()
-				return m, nil
-			}
-			if m.currentView == PlayerView {
-				m.currentView = LibraryView
-				return m, nil
-			}
-
-		case "tab":
-			if m.currentView != PlayerView {
-				m.previousView = m.currentView
-				return m, func() tea.Msg {
-					return SwitchViewMsg{View: PlayerView}
-				}
-			} else {
-				return m, func() tea.Msg {
-					return SwitchViewMsg{View: m.previousView}
-				}
-			}
-
-		case "p":
-			return m, m.playPause()
-
-		case "/":
-			if m.currentView == LibraryView && m.commandBar != nil {
-				m.commandBar.Active = true
-				m.commandBar.Prompt = "/"
-				m.commandBar.Reset()
-				m.libraryModel.searchQuery = ""
-				m.libraryModel.filterSongs()
-				return m, nil
-			}
-
-		case ":":
-			if m.commandBar != nil {
-				m.commandBar.Active = true
-				m.commandBar.Prompt = ":"
-				m.commandBar.Reset()
-				return m, nil
-			}
-		}
+	case TickMsg:
+		return m.handleTick()
 
 	case ErrorMsg:
-		m.lastError = msg.Error
-		m.errorTimeout = time.Now().Add(ErrorTimeout)
-
-		playerModel, playerCmd := m.playerModel.Update(PlaybackStatusMsg{
-			Error: msg.Error,
-		})
-		m.playerModel = playerModel.(*PlayerModel)
-		cmds = append(cmds, playerCmd)
-
-	case NextTrackMsg, SongFinishedMsg:
-		return m, m.playNextTrack()
-
-	case PrevTrackMsg:
-		return m, m.playPreviousTrack()
-
-	case SongSelectedMsg:
-		downloaderModel, _ := m.downloaderModel.Update(msg)
-		m.downloaderModel = downloaderModel.(*DownloaderModel)
-		return m.handleSongSelection(msg)
-
-	case SwitchViewMsg:
-		m.currentView = msg.View
+		if msg.Error != nil {
+			log.Printf("Error: %v", msg.Error)
+			m.lastError = msg.Error
+			return m, m.showToast(msg.Error.Error(), true)
+		}
 		return m, nil
 
-	case DownloadProgressMsg:
-		downloaderModel, cmd := m.downloaderModel.Update(msg)
-		m.downloaderModel = downloaderModel.(*DownloaderModel)
-		cmds = append(cmds, cmd)
+	case StatusMsg:
+		m.statusText = msg.Text
+		m.statusIsError = msg.IsError
+		m.statusExpiry = time.Now().Add(StatusTimeout)
+		lm, _ := m.libraryModel.Update(msg)
+		m.libraryModel = lm.(*LibraryModel)
+		pm, _ := m.playerModel.Update(msg)
+		m.playerModel = pm.(*PlayerModel)
+		return m, nil
 
-		cmds = append(cmds, m.listenForDownloadProgress())
+	case SongSelectedMsg:
+		m.selectSong(msg.Song, msg.KeepView)
+		return m, nil
 
-	case DownloadCompletedMsg:
-		if msg.Event.Error == nil && msg.Event.Song != nil {
-			m.songs = m.library.ListSongs()
-			libraryModel := NewLibraryModel(m.songs)
-			m.libraryModel = libraryModel
-		}
+	case NextTrackMsg:
+		return m, m.nextTrack(true)
 
-		downloaderModel, cmd := m.downloaderModel.Update(msg)
-		m.downloaderModel = downloaderModel.(*DownloaderModel)
-		cmds = append(cmds, cmd)
+	case PrevTrackMsg:
+		return m, m.prevTrack()
 
-		cmds = append(cmds, m.listenForDownloadCompletion())
+	case SongFinishedMsg:
+		return m, m.handleSongFinished()
 
-	case DownloadAddedMsg:
-		downloaderModel, cmd := m.downloaderModel.Update(msg)
-		m.downloaderModel = downloaderModel.(*DownloaderModel)
-		cmds = append(cmds, cmd)
+	case SwitchViewMsg:
+		m.switchView(msg.View)
+		return m, nil
+
+	case PlayMsg:
+		return m, m.play()
+	case PauseMsg:
+		return m, m.pause()
+	case TogglePlayMsg:
+		return m, m.togglePlay()
+	case StopRequestMsg:
+		return m, m.stopPlayback()
 	}
 
-	if tickMsg, ok := msg.(TickMsg); ok {
-		if m.lastError != nil && time.Now().After(m.errorTimeout) {
-			m.lastError = nil
+	return m, m.forwardToCurrentView(msg)
+}
+
+func (m *Model) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
+	m.width = msg.Width
+	m.height = msg.Height
+	m.albumArtRenderer = NewResponsiveAlbumArtRenderer(m.width, m.height)
+	m.commandBar.UpdateSize(m.width, m.height)
+
+	var cmds []tea.Cmd
+	for _, sub := range []tea.Model{m.libraryModel, m.playerModel} {
+		updated, cmd := sub.Update(msg)
+		cmds = append(cmds, cmd)
+		switch v := updated.(type) {
+		case *LibraryModel:
+			m.libraryModel = v
+		case *PlayerModel:
+			m.playerModel = v
 		}
+	}
+	return m, tea.Batch(cmds...)
+}
 
-		if m.AudioPlayer.HasPlaybackFinished() || m.AudioPlayer.IsAtEnd() {
-			cmds = append(cmds, func() tea.Msg {
-				return SongFinishedMsg{}
-			})
+func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+
+	if m.helpOpen {
+		m.helpOpen = false
+		return m, nil
+	}
+
+	if m.commandBar.Active {
+		return m.handleCommandBarKey(msg, key)
+	}
+
+	switch key {
+	case "ctrl+c", "q":
+		return m, tea.Quit
+
+	case "?":
+		m.helpOpen = true
+		return m, nil
+
+	case "esc":
+		if m.currentView == PlayerView {
+			m.switchView(LibraryView)
 		}
+		return m, nil
 
-		statusMsg := PlaybackStatusMsg{
-			IsPlaying: m.AudioPlayer.IsPlaying(),
+	case "tab":
+		if m.currentView != PlayerView {
+			m.previousView = m.currentView
+			m.switchView(PlayerView)
+		} else {
+			m.switchView(m.previousView)
 		}
+		return m, nil
 
-		libraryModel, _ := m.libraryModel.Update(statusMsg)
-		m.libraryModel = libraryModel.(*LibraryModel)
+	case "p":
+		return m, m.togglePlay()
 
-		if m.currentView == LibraryView {
-			positionMsg := PlaybackPositionMsg{
-				Position:      m.AudioPlayer.GetPlaybackPosition(),
-				TotalDuration: m.AudioPlayer.GetTotalLength(),
+	case "+", "=":
+		return m, m.changeVolume(VolumeStep)
+	case "-", "_":
+		return m, m.changeVolume(-VolumeStep)
+	case "m":
+		return m, m.toggleMute()
+
+	case "up", "down":
+
+		if m.currentView == PlayerView {
+			delta := VolumeStep
+			if key == "down" {
+				delta = -VolumeStep
 			}
-			libraryModel, _ = m.libraryModel.Update(positionMsg)
-			m.libraryModel = libraryModel.(*LibraryModel)
+			return m, m.changeVolume(delta)
 		}
 
-		if err := m.AudioPlayer.GetLastError(); err != nil && err != m.lastError {
-			cmds = append(cmds, func() tea.Msg {
-				return ErrorMsg{Error: err}
-			})
-		}
+	case "r":
+		return m, m.cycleRepeatMode()
+	case "z":
+		return m, m.toggleShuffle()
 
-		_ = tickMsg
+	case "R":
+		if m.currentView == LibraryView {
+			return m, m.rescanLibrary()
+		}
+		return m, nil
+
+	case "/":
+		if m.currentView == LibraryView {
+			m.commandBar.Active = true
+			m.commandBar.Prompt = "/"
+			m.commandBar.Reset()
+			m.libraryModel.searchQuery = ""
+			m.libraryModel.filterSongs()
+		}
+		return m, nil
+
+	case ":":
+		m.commandBar.Active = true
+		m.commandBar.Prompt = ":"
+		m.commandBar.Reset()
+		return m, nil
 	}
 
+	return m, m.forwardToCurrentView(msg)
+}
+
+func (m *Model) handleCommandBarKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) {
+	isSearch := m.commandBar.Prompt == "/" && m.currentView == LibraryView
+
+	switch key {
+	case "ctrl+c":
+		return m, tea.Quit
+
+	case "enter":
+		if isSearch {
+			m.commandBar.Active = false
+			m.commandBar.Reset()
+			return m, nil
+		}
+		input := strings.TrimSpace(m.commandBar.Input)
+		m.commandBar.Active = false
+		m.commandBar.Reset()
+		if input != "" {
+			return m, m.executeCommand(input)
+		}
+		return m, nil
+
+	case "esc":
+		if isSearch {
+			m.libraryModel.searchQuery = ""
+			m.libraryModel.filterSongs()
+		}
+		m.commandBar.Active = false
+		m.commandBar.Reset()
+		return m, nil
+
+	case "backspace":
+		if len(m.commandBar.Input) > 0 {
+			m.commandBar.Input = m.commandBar.Input[:len(m.commandBar.Input)-1]
+		}
+		if isSearch {
+			m.libraryModel.searchQuery = m.commandBar.Input
+			m.libraryModel.filterSongs()
+		}
+		return m, nil
+
+	default:
+		if updated := AppendRunesInput(m.commandBar.Input, msg); updated != m.commandBar.Input {
+			m.commandBar.Input = updated
+			if isSearch {
+				m.libraryModel.searchQuery = m.commandBar.Input
+				m.libraryModel.filterSongs()
+			}
+		}
+		return m, nil
+	}
+}
+
+func (m *Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	switch msg.Button {
+	case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown:
+		if m.currentView == PlayerView {
+			delta := VolumeStep
+			if msg.Button == tea.MouseButtonWheelDown {
+				delta = -VolumeStep
+			}
+			return m, m.changeVolume(delta)
+		}
+		keyType := tea.KeyUp
+		if msg.Button == tea.MouseButtonWheelDown {
+			keyType = tea.KeyDown
+		}
+		lm, _ := m.libraryModel.Update(tea.KeyMsg{Type: keyType})
+		m.libraryModel = lm.(*LibraryModel)
+		return m, nil
+
+	case tea.MouseButtonLeft:
+		if msg.Action != tea.MouseActionPress {
+			return m, nil
+		}
+		switch m.currentView {
+		case LibraryView:
+			return m, m.libraryModel.HandleClick(msg)
+		case PlayerView:
+			return m, m.playerModel.HandleClick(msg)
+		}
+	}
+	return m, nil
+}
+
+func (m *Model) handleTick() (tea.Model, tea.Cmd) {
+	cmds := []tea.Cmd{m.scheduleTick()}
+
+	m.expireStatus()
+
+	if m.AudioPlayer != nil {
+		finished := m.AudioPlayer.ConsumePlaybackFinished()
+		if !finished && !m.finishHandled && m.AudioPlayer.IsPlaying() && m.AudioPlayer.IsAtEnd() {
+			finished = true
+		}
+		if finished && !m.finishHandled {
+			m.finishHandled = true
+			cmds = append(cmds, func() tea.Msg { return SongFinishedMsg{} })
+		}
+
+		status := PlaybackStatusMsg{IsPlaying: m.AudioPlayer.IsPlaying()}
+		position := PlaybackPositionMsg{
+			Position:      m.AudioPlayer.GetPlaybackPosition(),
+			TotalDuration: m.AudioPlayer.GetTotalLength(),
+		}
+
+		lm, _ := m.libraryModel.Update(position)
+		m.libraryModel = lm.(*LibraryModel)
+
+		pm, _ := m.playerModel.Update(status)
+		m.playerModel = pm.(*PlayerModel)
+		pm, _ = m.playerModel.Update(position)
+		m.playerModel = pm.(*PlayerModel)
+	}
+
+	return m, tea.Batch(cmds...)
+}
+
+func (m *Model) forwardToCurrentView(msg tea.Msg) tea.Cmd {
 	switch m.currentView {
 	case LibraryView:
-		libraryModel, cmd := m.libraryModel.Update(msg)
-		m.libraryModel = libraryModel.(*LibraryModel)
-		cmds = append(cmds, cmd)
-
-	case PlayerView:
-
-		playerModel, cmd := m.playerModel.Update(msg)
-		m.playerModel = playerModel.(*PlayerModel)
-		cmds = append(cmds, cmd)
-
-		if _, ok := msg.(PlaybackStatusMsg); ok {
-			libraryModel, _ := m.libraryModel.Update(msg)
-			m.libraryModel = libraryModel.(*LibraryModel)
-		}
-
-	case DownloaderView:
-		downloaderModel, cmd := m.downloaderModel.Update(msg)
-		m.downloaderModel = downloaderModel.(*DownloaderModel)
-		cmds = append(cmds, cmd)
+		updated, cmd := m.libraryModel.Update(msg)
+		m.libraryModel = updated.(*LibraryModel)
+		return cmd
+	default:
+		updated, cmd := m.playerModel.Update(msg)
+		m.playerModel = updated.(*PlayerModel)
+		return cmd
 	}
-
-	return m, tea.Batch(cmds...)
 }
 
-func (m *Model) handleSongSelection(msg SongSelectedMsg) (tea.Model, tea.Cmd) {
-	var cmds []tea.Cmd
-
-	if !msg.KeepView {
-		m.currentView = PlayerView
+func (m *Model) switchView(view ViewState) {
+	if view == m.currentView {
+		return
 	}
-
-	m.currentSongIndex = m.libraryModel.FindSongIndex(msg.Song)
-
-	libraryModel, _ := m.libraryModel.Update(msg)
-	m.libraryModel = libraryModel.(*LibraryModel)
-
-	if m.SelectedSong != nil && m.SelectedSong.Path == msg.Song.Path {
-		playerModel, playerCmd := m.playerModel.Update(msg)
-		m.playerModel = playerModel.(*PlayerModel)
-		return m, playerCmd
+	if view != PlayerView {
+		m.previousView = m.currentView
 	}
-
-	m.SelectedSong = &msg.Song
-
-	rawDominantColor := m.albumArtRenderer.ExtractDominantColor(msg.Song)
-	m.dominantColor = Colors.AdjustColorForContrast(rawDominantColor)
-
-	colorMsg := DominantColorMsg{Color: m.dominantColor}
-	dModel, _ := m.downloaderModel.Update(colorMsg)
-	m.downloaderModel = dModel.(*DownloaderModel)
-	lModel, _ := m.libraryModel.Update(colorMsg)
-	m.libraryModel = lModel.(*LibraryModel)
-
-	if err := m.loadAndPlaySong(msg.Song); err != nil {
-		playerModel, playerCmd := m.playerModel.Update(PlaybackStatusMsg{
-			Error: err,
-		})
-		m.playerModel = playerModel.(*PlayerModel)
-		cmds = append(cmds, playerCmd)
-
-		cmds = append(cmds, func() tea.Msg {
-			return ErrorMsg{Error: err}
-		})
-	} else {
-		playerModel, playerCmd := m.playerModel.Update(msg)
-		m.playerModel = playerModel.(*PlayerModel)
-		cmds = append(cmds, playerCmd)
-	}
-
-	return m, tea.Batch(cmds...)
+	m.currentView = view
 }
 
-func (m *Model) loadAndPlaySong(song lib.Song) error {
-
-	if m.AudioPlayer.IsPlaying() {
-		m.AudioPlayer.Stop()
+func (m *Model) expireStatus() {
+	if m.statusText != "" && time.Now().After(m.statusExpiry) {
+		m.statusText = ""
 	}
-
-	if song.Path == "" {
-		return fmt.Errorf("invalid song path")
-	}
-
-	if err := m.AudioPlayer.Load(song.Path); err != nil {
-		return fmt.Errorf("failed to load song '%s': %w", song.Title, err)
-	}
-
-	if err := m.AudioPlayer.Play(); err != nil {
-		return fmt.Errorf("failed to play song '%s': %w", song.Title, err)
-	}
-
-	m.AudioPlayer.ForceGC()
-
-	return nil
 }
 
-func (m *Model) GetLastError() error {
-	return m.lastError
+func (m *Model) showToast(text string, isError bool) tea.Cmd {
+	return func() tea.Msg { return StatusMsg{Text: text, IsError: isError} }
 }
 
 func (m *Model) View() string {
+	if m.helpOpen {
+		return RenderHelpOverlay(m.width, m.height)
+	}
+
 	var base string
 	switch m.currentView {
 	case LibraryView:
 		base = m.libraryModel.View()
-	case PlayerView:
-		base = m.playerModel.View()
-	case DownloaderView:
-		base = m.downloaderModel.View()
 	default:
-		base = "Unknown view"
+		base = m.playerModel.View()
 	}
 
-	if m.commandBar != nil && m.commandBar.Active {
+	if m.commandBar.Active {
 		if !strings.HasSuffix(base, "\n") {
 			base += "\n"
 		}
@@ -532,260 +434,6 @@ func (m *Model) View() string {
 	return base
 }
 
-func (m *Model) executeCommand(input string) tea.Cmd {
-	if input == "" {
-		return nil
-	}
-	trimmed := strings.TrimSpace(input)
-
-	if strings.HasPrefix(trimmed, "/") {
-		query := strings.TrimSpace(trimmed[1:])
-		if query == "" {
-			return nil
-		}
-		m.currentView = LibraryView
-		m.libraryModel.searchQuery = query
-		m.libraryModel.filterSongs()
-		return nil
-	}
-
-	if !strings.Contains(trimmed, " ") && len(trimmed) >= 2 && (trimmed[0] == 'v' || trimmed[0] == 'V') {
-		second := strings.ToLower(string(trimmed[1]))
-		switch second {
-		case "l":
-			return func() tea.Msg { return SwitchViewMsg{View: LibraryView} }
-		case "p":
-			return func() tea.Msg { return SwitchViewMsg{View: PlayerView} }
-		case "d":
-			return func() tea.Msg { return SwitchViewMsg{View: DownloaderView} }
-		}
-	}
-
-	parts := strings.Fields(trimmed)
-	if len(parts) == 0 {
-		return nil
-	}
-	cmd := strings.ToLower(parts[0])
-
-	switch cmd {
-	case "q", "quit", "exit":
-		return tea.Quit
-
-	case "play":
-		return m.play()
-	case "pause":
-		return m.pause()
-	case "next":
-		return m.playNextTrack()
-	case "prev":
-		return m.playPreviousTrack()
-
-	case "stop":
-		return m.stop()
-
-	case "view":
-		if len(parts) < 2 {
-			return nil
-		}
-		switch strings.ToLower(parts[1]) {
-		case "lib", "library", "l":
-			return func() tea.Msg { return SwitchViewMsg{View: LibraryView} }
-		case "player", "p":
-			return func() tea.Msg { return SwitchViewMsg{View: PlayerView} }
-		case "dl", "downloader", "d":
-			return func() tea.Msg { return SwitchViewMsg{View: DownloaderView} }
-		}
-		return nil
-
-	case "search":
-		if len(parts) < 2 {
-			return nil
-		}
-		query := strings.Join(parts[1:], " ")
-		m.currentView = LibraryView
-		m.libraryModel.searchQuery = query
-		m.libraryModel.filterSongs()
-		return nil
-	}
-	return nil
-}
-
-func (m *Model) play() tea.Cmd {
-	if m.AudioPlayer.IsPlaying() {
-		return nil
-	}
-
-	err := m.AudioPlayer.Play()
-	if err != nil {
-		return func() tea.Msg {
-			return ErrorMsg{Error: err}
-		}
-	}
-
-	return func() tea.Msg {
-		return PlayPauseMsg{}
-	}
-}
-
-func (m *Model) pause() tea.Cmd {
-	if !m.AudioPlayer.IsPlaying() {
-		return nil
-	}
-
-	err := m.AudioPlayer.Pause()
-	if err != nil {
-		return func() tea.Msg {
-			return ErrorMsg{Error: err}
-		}
-	}
-
-	return func() tea.Msg {
-		return PlayPauseMsg{}
-	}
-}
-
-func (m *Model) playPause() tea.Cmd {
-	if m.AudioPlayer.IsPlaying() {
-		err := m.AudioPlayer.Pause()
-		if err != nil {
-			return func() tea.Msg {
-				return ErrorMsg{Error: err}
-			}
-		}
-	} else {
-		err := m.AudioPlayer.Play()
-		if err != nil {
-			return func() tea.Msg {
-				return ErrorMsg{Error: err}
-			}
-		}
-	}
-
-	m.playerModel.updatePlaybackStatus()
-
-	return func() tea.Msg {
-		return PlayPauseMsg{}
-	}
-}
-
-func (m *Model) stop() tea.Cmd {
-	if m.AudioPlayer.IsPlaying() {
-		err := m.AudioPlayer.Stop()
-		if err != nil {
-			return func() tea.Msg {
-				return ErrorMsg{Error: err}
-			}
-		}
-	}
-
-	m.playerModel.currentSong = nil
-	m.playerModel.isPlaying = false
-	m.playerModel.position = 0
-	m.playerModel.totalDuration = 0
-	m.playerModel.lastUpdate = time.Now()
-
-	return func() tea.Msg {
-		return StopMsg{}
-	}
-}
-
-func (m *Model) playNextTrack() tea.Cmd {
-
-	orderedSongs := m.libraryModel.GetOrderedSongs()
-
-	if len(orderedSongs) == 0 || m.currentSongIndex < 0 {
-		return nil
-	}
-
-	nextIndex := m.currentSongIndex + 1
-	if nextIndex >= len(orderedSongs) {
-
-		nextIndex = 0
-	}
-
-	m.currentSongIndex = nextIndex
-	nextSong := orderedSongs[nextIndex]
-
-	return func() tea.Msg {
-		return SongSelectedMsg{Song: nextSong, KeepView: true}
-	}
-}
-
-func (m *Model) playPreviousTrack() tea.Cmd {
-
-	orderedSongs := m.libraryModel.GetOrderedSongs()
-
-	if len(orderedSongs) == 0 || m.currentSongIndex < 0 {
-		return nil
-	}
-
-	prevIndex := m.currentSongIndex - 1
-	if prevIndex < 0 {
-
-		prevIndex = len(orderedSongs) - 1
-	}
-
-	m.currentSongIndex = prevIndex
-	prevSong := orderedSongs[prevIndex]
-
-	return func() tea.Msg {
-		return SongSelectedMsg{Song: prevSong, KeepView: true}
-	}
-}
-
-const (
-	Play      = "play"
-	Pause     = "pause"
-	PlayPause = "playpause"
-	NextTrack = "next"
-	PrevTrack = "prev"
-	Stop      = "stop"
-)
-
-func (m *Model) ControlPlayback(action string) error {
-	if m.AudioPlayer == nil {
-		return fmt.Errorf("audio player not initialized")
-	}
-
-	switch action {
-	case Play:
-		cmd := m.play()
-		if cmd != nil {
-			msg := cmd()
-			_, _ = m.Update(msg)
-		}
-	case Pause:
-		cmd := m.pause()
-		if cmd != nil {
-			msg := cmd()
-			_, _ = m.Update(msg)
-		}
-	case PlayPause:
-		cmd := m.playPause()
-		if cmd != nil {
-			msg := cmd()
-			_, _ = m.Update(msg)
-		}
-	case Stop:
-		cmd := m.stop()
-		if cmd != nil {
-			msg := cmd()
-			_, _ = m.Update(msg)
-		}
-	case NextTrack:
-		cmd := m.playNextTrack()
-		if cmd != nil {
-			msg := cmd()
-			_, _ = m.Update(msg)
-		}
-	case PrevTrack:
-		cmd := m.playPreviousTrack()
-		if cmd != nil {
-			msg := cmd()
-			_, _ = m.Update(msg)
-		}
-	default:
-		return fmt.Errorf("unknown action: %s", action)
-	}
-	return nil
+func (m *Model) GetLastError() error {
+	return m.lastError
 }

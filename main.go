@@ -4,11 +4,9 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/signal"
-	"syscall"
+	"path/filepath"
 
 	"kanade/audio"
-	"kanade/downloader"
 	"kanade/hotkey"
 	"kanade/library"
 	"kanade/tui"
@@ -16,110 +14,113 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+const usage = `Kanade — a minimal terminal music player.
+
+Usage:
+  kanade [directory]
+
+Arguments:
+  directory    Folder containing your music (default: current directory)
+
+Supported formats: .mp3 .wav .flac .ogg
+
+Once running, press ? for keybindings or :help for commands.`
+
 func main() {
-	homeDir, err := os.UserHomeDir()
+	dir, err := parseArgs(os.Args[1:])
 	if err != nil {
-		fmt.Printf("Error getting user home directory: %v\n", err)
-		os.Exit(1)
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
 	}
-	logDir := homeDir + string(os.PathSeparator) + ".kanade"
-	if err := os.MkdirAll(logDir, 0755); err != nil {
-		fmt.Printf("Error creating log directory: %v\n", err)
-		os.Exit(1)
-	}
-	logFilePath := logDir + string(os.PathSeparator) + "kanade.log"
-	logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
-	if err != nil {
-		fmt.Printf("Warning: could not open log file: %v\n", err)
-	} else {
-		defer logFile.Close()
-		log.SetOutput(logFile)
+	if dir == "" {
+		os.Exit(0)
 	}
 
-	var dir string
-	if len(os.Args) > 1 {
-		if os.Args[1] == "--help" || os.Args[1] == "-h" {
-			fmt.Println("Usage: kanade [directory]")
-			fmt.Println("If no directory is specified, it defaults to the current working directory.")
-			os.Exit(0)
-		}
+	setupLogging()
 
-		dir = os.Args[1]
-		if err := os.Chdir(dir); err != nil {
-			fmt.Printf("Error changing directory to '%s': %v\n", dir, err)
-			os.Exit(1)
-		}
-	} else {
-		currentDir, err := os.Getwd()
-		if err != nil {
-			fmt.Printf("Error getting current directory: %v\n", err)
-			os.Exit(1)
-		}
-		dir = currentDir
-	}
-
-	library := &library.Library{}
 	player := audio.NewPlayer()
-
-	downloaderManager := downloader.NewManager(library, dir, 3)
-	downloaderManager.Start()
-
-	cleanup := func() {
-		log.Println("Shutting down")
-		downloaderManager.Stop()
+	defer func() {
 		if err := player.Close(); err != nil {
 			log.Printf("Error closing audio player: %v", err)
 		}
-		log.Println("Cleanup completed")
-	}
-	defer cleanup()
-
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		<-c
-		log.Println("Received interrupt signal")
-		cleanup()
-		os.Exit(0)
 	}()
 
 	log.Printf("Reading songs from directory: %s", dir)
-	songs, err := library.ReadDir(dir)
+	lib := &library.Library{}
+	songs, err := lib.ReadDir(dir)
 	if err != nil {
 		fmt.Printf("Error reading directory '%s': %v\n", dir, err)
 		os.Exit(1)
 	}
 
 	if len(songs) == 0 {
-		fmt.Printf("No songs found in '%s'\n", dir)
-		fmt.Println("Please add some .mp3 files to the directory")
+		fmt.Printf("No supported audio files found in '%s'.\n%s\n", dir, usage)
 		os.Exit(1)
 	}
-
 	log.Printf("Found %d songs", len(songs))
 
-	model := tui.NewModel(library, player, downloaderManager)
+	model := tui.NewModel(lib, player, dir)
 
-	p := tea.NewProgram(
+	program := tea.NewProgram(
 		model,
 		tea.WithAltScreen(),
 		tea.WithMouseAllMotion(),
 	)
+	model.SetProgram(program.Send)
 
 	hotkey.InitMediaKeys(model)
 
 	log.Println("Starting TUI application")
-	finalModel, err := p.Run()
-	if err != nil {
-		fmt.Printf("Error running program: %v\n", err)
+	if _, err := program.Run(); err != nil {
+		fmt.Printf("Error running application: %v\n", err)
 		os.Exit(1)
 	}
 
-	if model, ok := finalModel.(*tui.Model); ok {
-		if lastErr := model.GetLastError(); lastErr != nil {
-			log.Printf("Final error state: %v", lastErr)
+	if lastErr := model.GetLastError(); lastErr != nil {
+		log.Printf("Final error state: %v", lastErr)
+	}
+	log.Println("Application exited normally")
+}
+
+func parseArgs(args []string) (string, error) {
+	for _, arg := range args {
+		switch arg {
+		case "--help", "-h":
+			fmt.Println(usage)
+			return "", nil
+		default:
+			abs, err := filepath.Abs(arg)
+			if err != nil {
+				return "", fmt.Errorf("invalid directory '%s': %w", arg, err)
+			}
+			return abs, nil
 		}
 	}
+	return os.Getwd()
+}
 
-	log.Println("Application exited normally")
+func setupLogging() {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Printf("Warning: could not determine home directory for logs: %v\n", err)
+		return
+	}
+
+	logDir := filepath.Join(homeDir, ".kanade")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		fmt.Printf("Warning: could not create log directory: %v\n", err)
+		return
+	}
+
+	logFile, err := os.OpenFile(
+		filepath.Join(logDir, "kanade.log"),
+		os.O_CREATE|os.O_WRONLY|os.O_APPEND,
+		0o666,
+	)
+	if err != nil {
+		fmt.Printf("Warning: could not open log file: %v\n", err)
+		return
+	}
+
+	log.SetOutput(logFile)
 }
