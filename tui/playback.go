@@ -155,13 +155,6 @@ func (m *Model) selectSong(song lib.Song, keepView bool) {
 	m.libraryModel.currentSong = &song
 	m.playerModel.setSong(&song)
 
-	if m.coloredSongPath != song.Path {
-		raw := m.albumArtRenderer.ExtractDominantColor(song)
-		m.dominantColor = Colors.AdjustColorForContrast(raw)
-		m.coloredSongPath = song.Path
-	}
-	m.libraryModel.dominantColor = m.dominantColor
-
 	if err := m.loadAndPlaySong(song); err != nil {
 		m.lastError = err
 		m.statusText = err.Error()
@@ -170,6 +163,13 @@ func (m *Model) selectSong(song lib.Song, keepView bool) {
 		return
 	}
 	m.playerModel.updatePlaybackStatus()
+
+	if m.coloredSongPath != song.Path {
+		raw := m.albumArtRenderer.ExtractDominantColor(song)
+		m.dominantColor = Colors.AdjustColorForContrast(raw)
+		m.coloredSongPath = song.Path
+	}
+	m.libraryModel.dominantColor = m.dominantColor
 }
 
 func (m *Model) loadAndPlaySong(song lib.Song) error {
@@ -185,7 +185,6 @@ func (m *Model) loadAndPlaySong(song lib.Song) error {
 	if err := m.AudioPlayer.Play(); err != nil {
 		return fmt.Errorf("failed to play '%s': %w", song.Title, err)
 	}
-	m.AudioPlayer.ForceGC()
 	return nil
 }
 

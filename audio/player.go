@@ -1,6 +1,8 @@
 package audio
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -10,6 +12,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"kanade/ffmpeg"
 
 	"github.com/gopxl/beep/v2"
 	"github.com/gopxl/beep/v2/effects"
@@ -45,9 +49,6 @@ type Player struct {
 	playbackDone chan struct{}
 	playbackMu   sync.Mutex
 
-	lastLoadTime time.Time
-	loadThrottle time.Duration
-
 	trackLoadCount int
 	lastDeepClean  time.Time
 
@@ -61,7 +62,6 @@ func NewPlayer() *Player {
 	return &Player{
 		volumeLevel:  DefaultVolume,
 		playbackDone: make(chan struct{}, 1),
-		loadThrottle: 50 * time.Millisecond,
 	}
 }
 
@@ -96,13 +96,6 @@ func (p *Player) Load(filePath string) error {
 		return fmt.Errorf("player is closed")
 	}
 
-	timeSinceLastLoad := time.Since(p.lastLoadTime)
-	if timeSinceLastLoad < p.loadThrottle {
-		waitTime := p.loadThrottle - timeSinceLastLoad
-		time.Sleep(waitTime)
-	}
-	p.lastLoadTime = time.Now()
-
 	atomic.StoreInt32(&p.switchingTrack, 1)
 	defer atomic.StoreInt32(&p.switchingTrack, 0)
 
@@ -122,13 +115,10 @@ func (p *Player) Load(filePath string) error {
 	if p.isPlaying {
 		speaker.Clear()
 		p.isPlaying = false
-
-		time.Sleep(10 * time.Millisecond)
 	}
 
 	speaker.Clear()
 	time.Sleep(2 * time.Millisecond)
-	speaker.Clear()
 
 	if p.streamer != nil {
 		if err := p.streamer.Close(); err != nil {
@@ -149,8 +139,6 @@ func (p *Player) Load(filePath string) error {
 	p.ctrl = nil
 	p.volume = nil
 
-	runtime.GC()
-
 	if _, err := os.Stat(filePath); err != nil {
 		return fmt.Errorf("file not accessible: %w", err)
 	}
@@ -170,29 +158,48 @@ func (p *Player) Load(filePath string) error {
 	var format beep.Format
 	ext := strings.ToLower(filepath.Ext(filePath))
 
-	switch ext {
-	case ".mp3":
-		streamer, format, err = mp3.Decode(file)
-		if err != nil {
-			return fmt.Errorf("failed to decode MP3: %w", err)
+	decodeNative := func() error {
+		switch ext {
+		case ".mp3":
+			streamer, format, err = mp3.Decode(file)
+		case ".wav":
+			streamer, format, err = wav.Decode(file)
+		case ".flac":
+			streamer, format, err = flac.Decode(file)
+		case ".ogg", ".oga":
+			streamer, format, err = vorbis.Decode(file)
+		default:
+			return errNoNativeDecoder
 		}
-	case ".wav":
-		streamer, format, err = wav.Decode(file)
 		if err != nil {
-			return fmt.Errorf("failed to decode WAV: %w", err)
+			streamer, format = nil, beep.Format{}
+			return err
 		}
-	case ".flac":
-		streamer, format, err = flac.Decode(file)
-		if err != nil {
-			return fmt.Errorf("failed to decode FLAC: %w", err)
+		return nil
+	}
+
+	nativeErr := decodeNative()
+
+	if nativeErr != nil {
+		fileToClose.Close()
+		fileToClose = nil
+
+		ffExe, ffErr := ffmpeg.Wait(context.Background())
+		if ffErr != nil {
+			if errors.Is(nativeErr, errNoNativeDecoder) {
+				return fmt.Errorf("cannot play %s: %w", ext, ffErr)
+			}
+			return fmt.Errorf("failed to decode %s: %w", ext, nativeErr)
 		}
-	case ".ogg":
-		streamer, format, err = vorbis.Decode(file)
-		if err != nil {
-			return fmt.Errorf("failed to decode OGG: %w", err)
+
+		extStream, extFormat, extErr := decodeExternal(ffExe, filePath)
+		if extErr != nil {
+			if errors.Is(nativeErr, errNoNativeDecoder) {
+				return fmt.Errorf("failed to decode %s: %w", ext, extErr)
+			}
+			return fmt.Errorf("failed to decode %s: %v (fallback failed: %w)", ext, nativeErr, extErr)
 		}
-	default:
-		return fmt.Errorf("unsupported file format: %s", ext)
+		streamer, format = extStream, extFormat
 	}
 
 	if streamer == nil {
@@ -200,7 +207,7 @@ func (p *Player) Load(filePath string) error {
 	}
 
 	totalSamples := streamer.Len()
-	if totalSamples <= 0 {
+	if totalSamples <= 0 && !isExternalStream(streamer) {
 		streamer.Close()
 		return fmt.Errorf("file contains no audio data or is corrupted")
 	}
@@ -208,7 +215,7 @@ func (p *Player) Load(filePath string) error {
 	shouldReinitSpeaker := !p.isInitialized
 	if p.isInitialized {
 		speaker.Clear()
-		time.Sleep(15 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 	}
 
 	if shouldReinitSpeaker {
@@ -634,10 +641,6 @@ func (p *Player) Close() error {
 	p.playbackMu.Unlock()
 
 	return err
-}
-
-func (p *Player) ForceGC() {
-	runtime.GC()
 }
 
 func (p *Player) DeepCleanup() {

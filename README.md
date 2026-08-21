@@ -21,13 +21,16 @@ Kanade is a lightweight, terminal-first music player designed for simplicity and
 - **Audio Playback:** Play, pause, seek, shuffle, and repeat (off / all / one).
 - **Search:** Instant filtering as you type.
 - **Mouse Support:** Click songs to play, scroll lists, click the progress bar to seek.
-- **Metadata Support:** Reads ID3/Vorbis tags to display song information.
+- **Metadata Support:** Reads ID3/Vorbis/MP4 tags to display song information.
 - **Album Art:** Renders album art directly in the terminal with an adaptive accent color.
 - **Media Keys:** System play/pause/next/previous keys work on Windows, macOS, and Linux (MPRIS).
 
 ## Supported Formats
 
-`.mp3` `.wav` `.flac` `.ogg`
+`.mp3` `.wav` `.flac` `.ogg` are decoded natively. Practically everything else — `.opus`, `.m4a`/`.aac`, `.wma`, `.ape`, `.wv`, `.aiff`, and more — plays through an embedded [ffmpeg](https://ffmpeg.org) bridge.
+
+> [!IMPORTANT]
+> Kanade uses `ffmpeg` for non-native formats. It is detected on your `PATH`; otherwise it is downloaded automatically to your user cache directory on first use.
 
 ## Keybindings
 

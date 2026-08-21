@@ -29,10 +29,12 @@ func (l *Library) ListSongs() []Song {
 }
 
 var SupportedAudioExtensions = map[string]bool{
-	".mp3":  true,
-	".wav":  true,
-	".flac": true,
-	".ogg":  true,
+	".mp3": true, ".wav": true, ".flac": true, ".ogg": true,
+	".oga": true, ".opus": true, ".m4a": true, ".m4b": true,
+	".mp4": true, ".aac": true, ".wma": true, ".ape": true,
+	".wv": true, ".tta": true, ".aiff": true, ".aif": true,
+	".au": true, ".caf": true, ".mka": true, ".ac3": true,
+	".dts": true, ".mpc": true, ".amr": true, ".gsm": true,
 }
 
 func isSupportedAudioFile(filename string) bool {

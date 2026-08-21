@@ -80,7 +80,7 @@ const (
 	DefaultSampleStep     = 3
 	HighQualitySampleStep = 5
 	LargeSampleThreshold  = 400000
-	SuperSamplingFactor   = 5
+	SuperSamplingFactor   = 3
 	KernelSize            = 3
 
 	ColorMapSize      = 1024
